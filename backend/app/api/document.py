@@ -17,6 +17,14 @@ MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 @router.post("/documents/upload", response_model=ApiResponse)
 async def upload_document(request: Request, file: UploadFile = File(...)):
     try:
+        # Check size before reading to avoid OOM
+        if file.size and file.size > MAX_FILE_SIZE:
+            return ApiResponse(
+                code=413,
+                message="file_too_large",
+                data={},
+                request_id=request.state.request_id,
+            )
         content = await file.read()
         if len(content) > MAX_FILE_SIZE:
             return ApiResponse(
@@ -42,6 +50,34 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
         )
     except Exception as exc:
         logger.error("document_upload_failed", extra={"error": str(exc)})
+        return ApiResponse(
+            code=500,
+            message="internal_error",
+            data={},
+            request_id=request.state.request_id,
+        )
+
+
+@router.get("/documents/recent", response_model=ApiResponse)
+def recent_documents(request: Request):
+    try:
+        with get_db() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, file_name, file_type, parse_status, chunk_count, created_at
+                FROM documents
+                ORDER BY created_at DESC
+                """
+            ).fetchall()
+            data = [dict(r) for r in rows]
+        return ApiResponse(
+            code=200,
+            message="success",
+            data={"items": data},
+            request_id=request.state.request_id,
+        )
+    except Exception as exc:
+        logger.error("recent_documents_failed", extra={"error": str(exc)})
         return ApiResponse(
             code=500,
             message="internal_error",
@@ -82,12 +118,26 @@ def delete_document(doc_id: str, request: Request):
             upload_file = raw_path
         else:
             upload_file = Path(settings.data_dir).parent / raw_path
+
+        # Security: verify resolved path is within data directory
+        upload_file = upload_file.resolve()
+        data_dir = Path(settings.data_dir).resolve()
+        if not str(upload_file).startswith(str(data_dir)):
+            return ApiResponse(
+                code=400,
+                message="invalid_file_path",
+                data={},
+                request_id=request.state.request_id,
+            )
+
         if upload_file.exists():
             upload_file.unlink()
 
         # 删除对应的 chunks 文件（文件名格式: {doc_id}.json）
-        chunk_path = Path(settings.data_dir) / "chunks" / f"{doc_id}.json"
-        if chunk_path.exists():
+        chunk_path = (Path(settings.data_dir) / "chunks" / f"{doc_id}.json").resolve()
+        if not str(chunk_path).startswith(str(data_dir)):
+            pass  # skip invalid path
+        elif chunk_path.exists():
             chunk_path.unlink()
 
         # 重建 FAISS 索引
@@ -109,31 +159,3 @@ def delete_document(doc_id: str, request: Request):
     except Exception as exc:
         logger.error("document_delete_failed", extra={"error": str(exc)})
         return ApiResponse(code=500, message="internal_error", data={}, request_id=request.state.request_id)
-
-
-@router.get("/documents/recent", response_model=ApiResponse)
-def recent_documents(request: Request):
-    try:
-        with get_db() as conn:
-            rows = conn.execute(
-                """
-                SELECT id, file_name, file_type, parse_status, chunk_count, created_at
-                FROM documents
-                ORDER BY created_at DESC
-                """
-            ).fetchall()
-            data = [dict(r) for r in rows]
-        return ApiResponse(
-            code=200,
-            message="success",
-            data={"items": data},
-            request_id=request.state.request_id,
-        )
-    except Exception as exc:
-        logger.error("recent_documents_failed", extra={"error": str(exc)})
-        return ApiResponse(
-            code=500,
-            message="internal_error",
-            data={},
-            request_id=request.state.request_id,
-        )

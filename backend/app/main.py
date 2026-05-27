@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
+import hmac
 import time
 from uuid import uuid4
 
@@ -41,22 +42,13 @@ async def startup_event():
     except Exception as exc:
         logger.warning("faiss_index_startup_check_failed", extra={"error": str(exc)})
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:8501", "http://127.0.0.1:8501"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-@app.middleware("http")
-async def request_id_middleware(request: Request, call_next):
-    request_id = str(uuid4())
-    request.state.request_id = request_id
-    response = await call_next(request)
-    response.headers["X-Request-Id"] = request_id
-    return response
+# Middleware registration order (Starlette executes in REVERSE / LIFO order):
+#
+# Registration order (top to bottom) → Execution order (bottom to top):
+#   1. access_log    → runs 4th (last)  — logs after request_id is set
+#   2. request_id    → runs 3rd         — sets request.state.request_id
+#   3. api_key       → runs 2nd         — checks auth after CORS headers
+#   4. CORSMiddleware→ runs 1st (first) — handles OPTIONS preflight before auth
 
 
 @app.middleware("http")
@@ -92,7 +84,16 @@ async def access_log_middleware(request: Request, call_next):
     return response
 
 
-# API Key 认证中间件 — 必须在所有其他中间件之后添加，以确保最先执行
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    request_id = str(uuid4())
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["X-Request-Id"] = request_id
+    return response
+
+
+# API Key 认证中间件
 @app.middleware("http")
 async def api_key_middleware(request: Request, call_next):
     # 健康检查和文档接口不需要认证
@@ -106,12 +107,23 @@ async def api_key_middleware(request: Request, call_next):
         )
     # 检查 API Key
     api_key = request.headers.get("X-API-Key")
-    if not api_key or api_key != settings.api_key:
+    if not api_key or not hmac.compare_digest(api_key, settings.api_key):
         return JSONResponse(
             status_code=401,
             content={"code": 401, "message": "unauthorized", "data": {}, "request_id": ""},
         )
     return await call_next(request)
+
+
+# CORSMiddleware — registered last so it executes first (LIFO),
+# ensuring OPTIONS preflight requests receive CORS headers before api_key check.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:8501", "http://127.0.0.1:8501"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 app.include_router(health_router, tags=["health"])

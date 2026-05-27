@@ -53,6 +53,8 @@ class EmbeddingService:
 
     def embed_documents(self, texts: Iterable[str]) -> np.ndarray:
         texts = list(texts)
+        if not texts:
+            return []
         model = self._load_model()
         if model is None:
             return np.vstack([self._fallback_embed_one(t) for t in texts])

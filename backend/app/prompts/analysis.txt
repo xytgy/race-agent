@@ -7,7 +7,7 @@
 4. 输出格式为 Markdown，使用清晰的标题和列表
 
 参考资料：
-{context}
+${context}
 
 赛题相关问题：
-{question}
+${question}

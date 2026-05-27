@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 import faiss
@@ -11,6 +12,11 @@ from app.service.embedding_service import EmbeddingService
 
 
 class VectorService:
+    _lock = threading.Lock()
+    _cached_index: faiss.Index | None = None
+    _cached_metadata: list[dict] | None = None
+    _cache_valid = False
+
     def __init__(self) -> None:
         self.embedding_service = EmbeddingService()
         self.faiss_dir = Path(settings.data_dir) / "faiss"
@@ -31,21 +37,28 @@ class VectorService:
         return any(self.chunks_dir.glob("*.json"))
 
     def rebuild_index(self) -> dict:
-        chunks = self._load_all_chunks()
-        if not chunks:
-            raise ValueError("no_chunks_found")
+        with self._lock:
+            chunks = self._load_all_chunks()
+            if not chunks:
+                raise ValueError("no_chunks_found")
 
-        texts = [c["content"] for c in chunks]
-        vectors = self.embedding_service.embed_documents(texts).astype(np.float32)
-        dim = vectors.shape[1]
-        index = faiss.IndexFlatIP(dim)
-        index.add(vectors)
+            texts = [c["content"] for c in chunks]
+            vectors = self.embedding_service.embed_documents(texts).astype(np.float32)
+            dim = vectors.shape[1]
+            index = faiss.IndexFlatIP(dim)
+            index.add(vectors)
 
-        faiss.write_index(index, str(self.index_path))
-        self.meta_path.write_text(
-            json.dumps(chunks, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        return {"indexed_chunks": len(chunks), "dimension": dim}
+            faiss.write_index(index, str(self.index_path))
+            self.meta_path.write_text(
+                json.dumps(chunks, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+
+            # Update in-memory cache
+            VectorService._cached_index = index
+            VectorService._cached_metadata = chunks
+            VectorService._cache_valid = True
+
+            return {"indexed_chunks": len(chunks), "dimension": dim}
 
     def ensure_index(self) -> None:
         """确保索引存在且与 chunks 目录一致。若索引缺失或 chunks 数量不匹配则自动重建。"""
@@ -70,11 +83,24 @@ class VectorService:
             if current_count > 0:
                 self.rebuild_index()
 
+    def _get_index_and_metadata(self) -> tuple[faiss.Index, list[dict]]:
+        """Return the index and metadata, using cache if valid."""
+        if VectorService._cache_valid and VectorService._cached_index is not None and VectorService._cached_metadata is not None:
+            return VectorService._cached_index, VectorService._cached_metadata
+
+        # Cache miss — load from disk and populate cache
+        with self._lock:
+            index = faiss.read_index(str(self.index_path))
+            metadata = json.loads(self.meta_path.read_text(encoding="utf-8"))
+            VectorService._cached_index = index
+            VectorService._cached_metadata = metadata
+            VectorService._cache_valid = True
+            return index, metadata
+
     def search(self, question: str, top_k: int = 3) -> tuple[list[dict], str]:
         self.ensure_index()
 
-        index = faiss.read_index(str(self.index_path))
-        metadata = json.loads(self.meta_path.read_text(encoding="utf-8"))
+        index, metadata = self._get_index_and_metadata()
 
         query = self.embedding_service.embed_text(question).astype(np.float32).reshape(1, -1)
         scores, ids = index.search(query, top_k)

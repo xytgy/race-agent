@@ -1,9 +1,9 @@
 from pydantic import BaseModel, constr
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 
 class ChatMessage(BaseModel):
-    role: str  # "user" or "assistant"
+    role: Literal["user", "assistant"]  # only allow user or assistant
     content: constr(max_length=2000)
 
 

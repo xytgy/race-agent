@@ -38,6 +38,10 @@ class TaskService:
             missing = [f for f in self.REQUIRED_FIELDS if f not in item]
             if missing:
                 raise ValueError(f"task[{idx}] missing_fields: {','.join(missing)}")
+            try:
+                hours = float(item.get("estimated_hours", 4))
+            except (ValueError, TypeError):
+                hours = 4.0
             normalized.append(
                 {
                     "title": str(item.get("title", "")).strip() or "未命名任务",
@@ -45,7 +49,7 @@ class TaskService:
                     "task_type": str(item.get("task_type", "GENERAL")).upper(),
                     "priority": str(item.get("priority", "MEDIUM")).upper(),
                     "difficulty": str(item.get("difficulty", "MEDIUM")).upper(),
-                    "estimated_hours": float(item.get("estimated_hours", 4)),
+                    "estimated_hours": hours,
                     "dependency": str(item.get("dependency", "")).strip(),
                     "deliverable": str(item.get("deliverable", "")).strip(),
                     "status": "TODO",

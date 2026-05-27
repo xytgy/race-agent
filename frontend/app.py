@@ -10,7 +10,7 @@ import streamlit_antd_components as sac
 
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
-API_KEY = os.getenv("API_KEY", "raceagent-dev-key-2026")
+API_KEY = os.getenv("API_KEY", "")
 SHOW_ADMIN_PAGES = os.getenv("FRONTEND_SHOW_ADMIN_PAGES", "false").lower() == "true"
 DEFAULT_TOP_K = 3
 
@@ -352,65 +352,10 @@ def inject_custom_css():
             justify-content: flex-start !important;
         }
 
-        /* 固定输入工具栏 */
-        .toolbar-fixed-wrapper {
-            position: fixed !important;
-            bottom: 80px !important;
-            left: 50% !important;
-            transform: translateX(-50%) !important;
-            width: calc(100% - 48px) !important;
-            max-width: 752px !important;
-            z-index: 998 !important;
-            background: #ffffff !important;
-            padding: 6px 8px !important;
-            border: 1px solid #e0e0e0 !important;
-            border-bottom: none !important;
-            border-radius: 12px 12px 0 0 !important;
-            box-shadow: 0 -2px 8px rgba(0,0,0,0.04) !important;
-        }
-        .toolbar-fixed-wrapper .stButton > button {
-            background: transparent !important;
-            border: none !important;
-            color: #666 !important;
-            font-size: 16px !important;
-            padding: 4px 8px !important;
-            min-width: 32px !important;
-            height: 32px !important;
-            display: flex !important;
-            align-items: center !important;
-            justify-content: center !important;
-            border-radius: 6px !important;
-            transition: all 0.15s !important;
-        }
-        .toolbar-fixed-wrapper .stButton > button:hover {
-            background: #f0f0f0 !important;
-            color: #333 !important;
-        }
-        .toolbar-fixed-wrapper [data-baseweb="select"] {
-            font-size: 13px !important;
-        }
-        .toolbar-fixed-wrapper [data-baseweb="popover"] {
-            z-index: 10000 !important;
-        }
         section.main .block-container {
             padding-bottom: 140px !important;
         }
         </style>
-        <script>
-        // 固定工具栏到输入框上方
-        function fixToolbarPosition() {
-            const toolbar = document.querySelector('.toolbar-fixed-wrapper');
-            const chatInput = document.querySelector('[data-testid="stChatInput"]');
-            if (toolbar && chatInput) {
-                const inputRect = chatInput.getBoundingClientRect();
-                toolbar.style.bottom = (window.innerHeight - inputRect.top + 8) + 'px';
-            }
-        }
-        // 页面加载和滚动时都执行
-        window.addEventListener('load', fixToolbarPosition);
-        window.addEventListener('scroll', fixToolbarPosition);
-        new MutationObserver(fixToolbarPosition).observe(document.body, {childList: true, subtree: true});
-        </script>
         """,
         unsafe_allow_html=True,
     )
@@ -702,14 +647,17 @@ def _handle_query(text: str):
     # 构建历史消息
     history = []
     for item in _get_current_messages()[-4:]:
-        history.append({"role": "user", "content": item["user"]})
+        history.append({"role": "user", "content": item["user"][:2000]})
         if item["assistant"].get("answer") and item["assistant"].get("kind") != "loading":
-            history.append({"role": "assistant", "content": item["assistant"]["answer"]})
+            history.append({"role": "assistant", "content": item["assistant"]["answer"][:2000]})
 
-    # 显示加载状态（仅用于展示进度提示，回答渲染在 status 容器外面）
+    # 显示加载状态
     result = None
     full_answer = ""
     references: list[dict] = []
+
+    # Streaming text placeholder - placed OUTSIDE and BEFORE the status block
+    # to render at full width (not constrained by status widget layout).
     answer_placeholder = st.empty()
 
     with st.status("正在分析资料...", expanded=True) as status:
@@ -720,7 +668,7 @@ def _handle_query(text: str):
             print(f"[Handle] 正在发送 SSE 流式请求到 {API_BASE_URL}/rag/query ...")
             resp = requests.post(
                 f"{API_BASE_URL}/rag/query",
-                json={"question": text, "top_k": DEFAULT_TOP_K, "history": history, "stream": True},
+                json={"question": text, "top_k": DEFAULT_TOP_K, "history": history, "stream": True, "model": st.session_state.selected_model},
                 headers=_api_headers(),
                 stream=True,
                 timeout=120,
@@ -757,17 +705,14 @@ def _handle_query(text: str):
                         token = event.get("token", "")
                         if token:
                             answer_tokens.append(token)
-                            # 实时更新占位符内容（逐字显示效果）
-                            current_text = "".join(answer_tokens)
+                            # Update streaming placeholder to show live text
                             answer_placeholder.markdown(
-                                f'<div class="assistant-content">{escape(current_text)}</div>',
+                                f'<div class="assistant-content">{escape("".join(answer_tokens))}</div>',
                                 unsafe_allow_html=True,
                             )
 
                 resp.close()
                 full_answer = "".join(answer_tokens)
-                # 流式渲染已完成，清除占位符，由下方统一渲染最终版本
-                answer_placeholder.empty()
                 print(f"[Handle] SSE 流式读取完成，回答长度: {len(full_answer)} 字符")
 
                 if full_answer:
@@ -797,7 +742,7 @@ def _handle_query(text: str):
             # ── 降级：普通请求 ──
             try:
                 print(f"[Handle] 正在发送普通请求到 {API_BASE_URL}/rag/query ...")
-                resp = _api_post_json("/rag/query", {"question": text, "top_k": DEFAULT_TOP_K, "history": history})
+                resp = _api_post_json("/rag/query", {"question": text, "top_k": DEFAULT_TOP_K, "history": history, "model": st.session_state.selected_model})
                 payload = resp.json()
                 print(f"[Handle] 普通请求响应状态码: {resp.status_code}")
                 if resp.status_code == 200 and payload.get("code") == 200:
@@ -828,6 +773,9 @@ def _handle_query(text: str):
             status.update(label="分析完成", state="complete")
 
     # ── 在 status 容器外面渲染 AI 回答（左对齐，宽度限制在 80% 以内）──
+    # Clear the streaming placeholder - final render goes after the status block
+    answer_placeholder.empty()
+
     if result and result.get("kind") == "error":
         st.error(result.get("answer", "发生未知错误"))
     else:
@@ -864,60 +812,44 @@ def _handle_query(text: str):
 # ── Input Toolbar & Model Selector ────────────────────────────────────
 
 def render_input_toolbar():
-    """渲染输入框工具栏 - 固定在 chat_input 上方"""
-    # 获取当前模型名称
-    current_model_name = "mimo-v2.5-pro"
-    for m in st.session_state.available_models:
-        if m["id"] == st.session_state.selected_model:
-            current_model_name = m["name"]
-            break
+    """渲染输入框工具栏 - 紧贴 chat_input 上方"""
+    # 工具栏布局：左(附件+代码) | 中(模型选择) | 右(语音+添加模型)
+    col_left, col_center, col_right = st.columns([1, 3, 1])
 
-    # 使用 st.container 创建工具栏容器，通过 CSS 类固定位置
-    with st.container():
-        st.markdown(
-            '<div class="toolbar-fixed-wrapper">',
-            unsafe_allow_html=True,
+    with col_left:
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("📎", key="toolbar_attach", help="附件"):
+                pass
+        with c2:
+            if st.button("⌨", key="toolbar_code", help="代码"):
+                pass
+
+    with col_center:
+        model_names = [m["name"] for m in st.session_state.available_models]
+        current_index = 0
+        for i, m in enumerate(st.session_state.available_models):
+            if m["id"] == st.session_state.selected_model:
+                current_index = i
+                break
+        selected = st.selectbox(
+            "模型", model_names, index=current_index,
+            key="model_selector_main", label_visibility="collapsed",
         )
+        for m in st.session_state.available_models:
+            if m["name"] == selected and st.session_state.selected_model != m["id"]:
+                st.session_state.selected_model = m["id"]
+                st.rerun()
 
-        # 工具栏布局：左侧图标 | 中间模型选择器 | 右侧图标
-        col_left, col_center, col_right = st.columns([1, 3, 1])
-
-        with col_left:
-            c1, c2 = st.columns(2)
-            with c1:
-                if st.button("📎", key="toolbar_attach", help="附件"):
-                    pass
-            with c2:
-                if st.button("⌨", key="toolbar_code", help="代码"):
-                    pass
-
-        with col_center:
-            model_names = [m["name"] for m in st.session_state.available_models]
-            current_index = 0
-            for i, m in enumerate(st.session_state.available_models):
-                if m["id"] == st.session_state.selected_model:
-                    current_index = i
-                    break
-            selected = st.selectbox(
-                "模型", model_names, index=current_index,
-                key="model_selector_main", label_visibility="collapsed",
-            )
-            for m in st.session_state.available_models:
-                if m["name"] == selected and st.session_state.selected_model != m["id"]:
-                    st.session_state.selected_model = m["id"]
-                    st.rerun()
-
-        with col_right:
-            c1, c2 = st.columns(2)
-            with c1:
-                if st.button("🎤", key="toolbar_voice", help="语音"):
-                    pass
-            with c2:
-                if st.button("➕", key="toolbar_add_model", help="添加模型"):
-                    st.session_state.show_add_model_dialog = True
-                    st.rerun()
-
-        st.markdown("</div>", unsafe_allow_html=True)
+    with col_right:
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("🎤", key="toolbar_voice", help="语音"):
+                pass
+        with c2:
+            if st.button("➕", key="toolbar_add_model", help="添加模型"):
+                st.session_state.show_add_model_dialog = True
+                st.rerun()
 
 
 def render_add_model_dialog():
@@ -1015,7 +947,7 @@ def main():
     # 渲染添加模型弹窗（如果有）
     render_add_model_dialog()
 
-    # 渲染输入框工具栏（在 chat_input 之前，通过 CSS :has() 选择器固定在底部）
+    # 渲染输入框工具栏（在 chat_input 之前，通过 Streamlit 原生组件渲染）
     render_input_toolbar()
 
     # Chat input at the very bottom

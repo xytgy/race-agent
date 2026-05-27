@@ -37,18 +37,21 @@ def rag_query(payload: RagQueryRequest, request: Request):
             )
 
             def event_generator():
-                # 先发送参考文献元信息，前端可据此渲染引用来源
-                yield f"data: {json.dumps({'type': 'meta', 'references': references, 'embedding_mode': embedding_mode}, ensure_ascii=False)}\n\n"
                 try:
+                    # 先发送参考文献元信息，前端可据此渲染引用来源
+                    yield f"data: {json.dumps({'type': 'meta', 'references': references, 'embedding_mode': embedding_mode}, ensure_ascii=False)}\n\n"
                     # 逐 token 发送
                     for token in token_gen:
                         yield f"data: {json.dumps({'type': 'token', 'token': token}, ensure_ascii=False)}\n\n"
+                except GeneratorExit:
+                    # 客户端断开连接，执行清理
+                    logger.info("sse_client_disconnected", extra={"request_id": request.state.request_id})
                 except Exception as exc:
                     # 流式生成过程中发生异常，向前端发送错误事件
                     logger.error("sse_stream_error", extra={"error": str(exc)})
                     yield f"data: {json.dumps({'type': 'error', 'message': '流式输出异常，请重试'}, ensure_ascii=False)}\n\n"
-                # 结束标记
-                yield "data: [DONE]\n\n"
+                finally:
+                    yield "data: [DONE]\n\n"
 
             return StreamingResponse(
                 event_generator(),

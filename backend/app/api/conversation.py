@@ -43,6 +43,11 @@ class ReplaceMessagesRequest(BaseModel):
             raise ValueError("messages list cannot exceed 100 items")
 
 
+class UpdateTitleRequest(BaseModel):
+    """更新会话标题请求体"""
+    title: constr(max_length=100) = "新对话"
+
+
 @router.get("/conversations", response_model=ApiResponse)
 def list_conversations(
     request: Request,
@@ -229,15 +234,19 @@ def replace_messages(conv_id: str, request: Request, payload: ReplaceMessagesReq
         messages = payload.messages
         now = datetime.now().isoformat()
 
+        # Atomic: get_db() commits on normal exit and rolls back on exception.
+        # Python's sqlite3 (default isolation_level) groups the DELETE + INSERTs
+        # into a single implicit transaction, so a crash mid-loop loses nothing.
         with get_db() as conn:
             conn.execute("DELETE FROM messages WHERE conversation_id = ?", (conv_id,))
-            for msg in messages:
-                role = msg.role.value
-                content = msg.content
-                msg_created = msg.created_at or now
-                conn.execute(
+            rows = [
+                (conv_id, msg.role.value, msg.content, msg.created_at or now)
+                for msg in messages
+            ]
+            if rows:
+                conn.executemany(
                     "INSERT INTO messages (conversation_id, role, content, created_at) VALUES (?, ?, ?, ?)",
-                    (conv_id, role, content, msg_created),
+                    rows,
                 )
         return ApiResponse(
             code=200,
@@ -256,11 +265,10 @@ def replace_messages(conv_id: str, request: Request, payload: ReplaceMessagesReq
 
 
 @router.post("/conversations/{conv_id}/title", response_model=ApiResponse)
-def update_conversation_title(conv_id: str, request: Request, payload: dict = None):
+def update_conversation_title(conv_id: str, request: Request, payload: UpdateTitleRequest):
     """更新会话标题"""
     try:
-        body = payload or {}
-        title = body.get("title", "新对话")
+        title = payload.title
 
         with get_db() as conn:
             conn.execute(
