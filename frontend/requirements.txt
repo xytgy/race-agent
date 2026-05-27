@@ -1,0 +1,4 @@
+streamlit==1.39.0
+streamlit-antd-components
+requests==2.32.3
+

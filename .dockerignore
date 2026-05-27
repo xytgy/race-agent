@@ -1,0 +1,24 @@
+# 排除敏感文件，防止密钥泄露到 Docker 镜像
+.env
+.env.*
+!.env.example
+
+# 排除开发工具和缓存
+.git
+.gitignore
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+.idea/
+.vscode/
+*.egg-info/
+
+# 排除数据目录（通过 volume 挂载）
+data/uploads/*
+data/chunks/*
+data/faiss/*
+data/logs/*
+data/sqlite/*
+data/frontend/*

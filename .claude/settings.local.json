@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv310/bin/pip install *)",
+      "Bash(python3 *)",
+      "Bash(awk '{print $2}')",
+      "Bash(xargs kill)",
+      "Bash(../.venv310/bin/streamlit run *)",
+      "Bash(HF_ENDPOINT=https://hf-mirror.com /Users/xytgy/Downloads/software/race-agent/.venv310/bin/python3.10 *)",
+      "Bash(curl -s http://localhost:8000/documents/recent)",
+      "Bash(/Users/xytgy/Downloads/software/race-agent/.venv310/bin/python -m json.tool)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8501)",
+      "Bash(echo \"Frontend PID: $!\")",
+      "Bash(/Users/xytgy/Downloads/software/race-agent/.venv310/bin/python *)",
+      "Bash(curl *)",
+      "Bash(../.venv310/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000)",
+      "Bash(echo \"Backend PID: $!\")",
+      "Bash(echo \"Backend: $!\")"
+    ]
+  }
+}

@@ -1,0 +1,31 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: raceagent-backend
+    env_file:
+      - .env
+    environment:
+      - DATA_DIR=/app/data
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./backend:/app/backend
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: raceagent-frontend
+    environment:
+      - API_BASE_URL=http://backend:8000
+      - DATA_DIR=/app/data
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./frontend:/app/frontend
+      - ./data:/app/data
+    depends_on:
+      - backend
