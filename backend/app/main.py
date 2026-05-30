@@ -19,6 +19,7 @@ from app.config.settings import settings
 from app.db.database import init_db
 from app.service.log_service import LogService
 from app.utils.logger import setup_logging, get_logger
+from app.service.vector_store_factory import create_vector_store
 
 
 setup_logging(settings.log_dir)
@@ -61,7 +62,6 @@ async def startup_event():
 
     # 启动时确保 FAISS 索引与 chunks 目录一致
     try:
-        from app.service.vector_store_factory import create_vector_store
         vs = create_vector_store()
         vs.ensure_index()
         logger.info("faiss_index_startup_check_done")
