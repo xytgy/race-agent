@@ -6,7 +6,7 @@ from html import escape
 
 import requests
 import streamlit as st
-import streamlit_antd_components as sac
+import streamlit.components.v1 as components
 
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
@@ -27,10 +27,31 @@ def _error_message(message: str) -> str:
         "llm_unauthorized": "模型服务认证失败，请检查 API Key。",
         "llm_rate_limited": "模型服务繁忙，请稍后重试。",
         "llm_timeout": "模型响应超时，请稍后重试。",
+        "llm_connect_timeout": "连接模型服务超时，请检查模型服务地址或网络。",
+        "llm_read_timeout": "模型生成响应超时，请稍后重试或调大超时时间。",
+        "llm_ssl_error": "模型服务 SSL 连接失败，请检查模型服务地址、证书或网络代理。",
+        "llm_bad_gateway": "模型服务网关异常，请稍后重试。",
+        "llm_connection_error": "无法连接模型服务，请检查 LLM_BASE_URL。",
+        "llm_invalid_response": "模型服务返回格式异常，请确认接口兼容 Chat Completions。",
+        "llm_forbidden": "模型服务拒绝访问，请检查 API Key 权限。",
         "llm_upstream_error": "模型服务暂时不可用，请稍后再试。",
         "vector_empty": "当前暂无可用资料，请先上传文档。",
+        "unauthorized": "接口鉴权失败，请检查前端是否配置 API_KEY。",
+        "internal_error": "后端处理失败，请查看后端日志。",
     }
     return mapping.get(message or "", "操作未完成，请稍后重试。")
+
+
+def _llm_diagnostics() -> tuple[bool, dict | str]:
+    try:
+        resp = _api_get("/diagnostics/llm", timeout=60)
+        payload = resp.json()
+        data = payload.get("data", {})
+        if payload.get("code") == 200:
+            return True, data
+        return False, data or _error_message(payload.get("message", ""))
+    except Exception as exc:
+        return False, f"诊断失败：{exc}"
 
 
 def _api_headers() -> dict:
@@ -206,6 +227,61 @@ def _load_logs() -> list[dict]:
     return []
 
 
+def _rag_debug(question: str, top_k: int, score_threshold: float | None = None) -> tuple[bool, dict | str]:
+    payload = {"question": question, "top_k": top_k, "stream": False}
+    if score_threshold is not None:
+        payload["score_threshold"] = score_threshold
+    try:
+        resp = _api_post_json("/rag/debug", payload, timeout=60)
+        data = resp.json()
+        if resp.status_code == 200 and data.get("code") == 200:
+            return True, data.get("data", {})
+        payload = data.get("data") or {}
+        if isinstance(payload, dict):
+            payload["message"] = data.get("message", "")
+            return False, payload
+        return False, _error_message(data.get("message", ""))
+    except Exception as exc:
+        return False, f"检索调试失败：{exc}"
+
+
+def _generate_tasks(query: str, context_hint: str, top_k: int) -> tuple[bool, dict | str]:
+    try:
+        resp = _api_post_json(
+            "/tasks/generate",
+            {"query": query, "context_hint": context_hint, "top_k": top_k},
+            timeout=180,
+        )
+        data = resp.json()
+        if resp.status_code == 200 and data.get("code") == 200:
+            return True, data.get("data", {})
+        return False, _error_message(data.get("message", ""))
+    except Exception as exc:
+        return False, f"任务生成失败：{exc}"
+
+
+def _load_tasks() -> list[dict]:
+    try:
+        resp = _api_get("/tasks")
+        payload = resp.json()
+        if resp.status_code == 200 and payload.get("code") == 200:
+            return payload.get("data", {}).get("items", [])
+    except Exception:
+        pass
+    return []
+
+
+def _load_task_detail(task_id: int) -> tuple[bool, dict | str]:
+    try:
+        resp = _api_get(f"/tasks/{task_id}")
+        payload = resp.json()
+        if resp.status_code == 200 and payload.get("code") == 200:
+            return True, payload.get("data", {})
+        return False, _error_message(payload.get("message", ""))
+    except Exception as exc:
+        return False, f"任务详情加载失败：{exc}"
+
+
 def _upload_document(uploaded_file) -> tuple[bool, str]:
     files = {
         "file": (
@@ -282,8 +358,8 @@ def inject_custom_css():
         section[data-testid="stSidebar"] .stButton > button { background: transparent !important; color: #ececec !important; border: 1px solid #424242 !important; border-radius: 8px !important; }
         section[data-testid="stSidebar"] .stButton > button:hover { background: #212121 !important; }
 
-        /* 聊天区 - 居中 */
-        .chat-container { max-width: 800px; margin: 0 auto; padding: 20px 24px; }
+        /* 聊天区 - 放宽正文区域 */
+        .chat-container { max-width: 1180px; margin: 0 auto; padding: 20px 28px; }
 
         /* 顶部栏 */
         .chat-header { position: sticky; top: 0; z-index: 999; display: flex; align-items: center; justify-content: space-between; padding: 12px 24px; background: rgba(255,255,255,0.95); backdrop-filter: blur(10px); border-bottom: 1px solid #f0f0f0; }
@@ -291,9 +367,9 @@ def inject_custom_css():
 
         /* 消息 - 无气泡边框 */
         .user-message { display: flex; justify-content: flex-end; margin-bottom: 16px; }
-        .user-bubble { max-width: 70%; background: #f0f4ff; color: #1a1a1a; border-radius: 16px; padding: 12px 16px; font-size: 15px; line-height: 1.6; }
+        .user-bubble { max-width: 72%; background: #f0f4ff; color: #1a1a1a; border-radius: 16px; padding: 12px 16px; font-size: 15px; line-height: 1.6; }
         .assistant-message { display: flex; gap: 0; margin-bottom: 16px; }
-        .assistant-content { max-width: 70%; font-size: 15px; line-height: 1.7; color: #1a1a1a; text-align: left; margin: 0; }
+        .assistant-content { width: 100%; max-width: 100%; font-size: 15px; line-height: 1.85; color: #1a1a1a; text-align: left; margin: 0; }
 
         /* 思考步骤 - 折叠 */
         .thinking-steps { background: #f8f9fa; border-radius: 8px; padding: 12px 16px; margin-bottom: 12px; border-left: 3px solid #10a37f; }
@@ -301,7 +377,7 @@ def inject_custom_css():
         .thinking-check { color: #10a37f; font-weight: 700; }
 
         /* AI 回答卡片 - 无边框 */
-        .answer-card { background: transparent; border: none; padding: 0; font-size: 15px; line-height: 1.7; color: #1a1a1a; }
+        .answer-card { width: 100%; max-width: 100%; background: transparent; border: none; padding: 0; font-size: 15px; line-height: 1.9; color: #1a1a1a; }
 
         /* 引用来源 */
         .ref-section { margin-top: 12px; padding-top: 12px; border-top: 1px solid #f0f0f0; }
@@ -340,7 +416,6 @@ def inject_custom_css():
         .stMarkdown .assistant-content,
         div[data-testid="stMarkdown"] .assistant-content {
             text-align: left !important;
-            max-width: 70% !important;
         }
 
         /* status 组件 - 左对齐 */
@@ -352,8 +427,20 @@ def inject_custom_css():
             justify-content: flex-start !important;
         }
 
-        section.main .block-container {
+        section.main .block-container,
+        section.main > div,
+        [data-testid="stAppViewContainer"] > div {
             padding-bottom: 140px !important;
+            max-width: 100% !important;
+            padding-left: 2rem !important;
+            padding-right: 2rem !important;
+        }
+
+        /* 确保 st.write_stream 输出的 markdown 容器不限宽 */
+        div[data-testid="stMarkdown"],
+        div[data-testid="stMarkdownContainer"] {
+            max-width: 100% !important;
+            width: 100% !important;
         }
         </style>
         """,
@@ -383,6 +470,12 @@ def init_session_state():
         st.session_state.selected_model = DEFAULT_MODELS[0]["id"]
     if "show_add_model_dialog" not in st.session_state:
         st.session_state.show_add_model_dialog = False
+    if "rag_debug_result" not in st.session_state:
+        st.session_state.rag_debug_result = None
+    if "task_generate_result" not in st.session_state:
+        st.session_state.task_generate_result = None
+    if "llm_diagnostic_result" not in st.session_state:
+        st.session_state.llm_diagnostic_result = None
 
 
 # ── Sidebar ────────────────────────────────────────────────────────────
@@ -585,6 +678,184 @@ def render_message(message: dict):
             st.markdown(refs_html, unsafe_allow_html=True)
 
 
+def _format_reference_label(ref: dict) -> str:
+    parts = [str(ref.get("source_file") or "未命名资料")]
+    if ref.get("page_no") is not None:
+        parts.append(f"第 {ref.get('page_no')} 页")
+    if ref.get("section"):
+        parts.append(str(ref.get("section")))
+    if ref.get("chunk_id"):
+        parts.append(str(ref.get("chunk_id")))
+    return " / ".join(parts)
+
+
+def render_references(refs: list[dict], *, title: str = "引用来源"):
+    if not refs:
+        st.caption("暂无引用来源。")
+        return
+    st.caption(title)
+    for ref in refs:
+        score = ref.get("score")
+        score_text = f" · 相似度 {float(score):.4f}" if score is not None else ""
+        preview = ref.get("preview") or ref.get("content") or ""
+        st.markdown(f"**{_format_reference_label(ref)}{score_text}**")
+        if preview:
+            st.caption(preview)
+
+
+def render_workflow_summary(workflow: dict):
+    if not workflow:
+        return
+    engine = workflow.get("engine", "unknown")
+    review = workflow.get("review", {})
+    status = "通过" if review.get("passed") else "需要检查"
+    st.caption(f"编排引擎：{engine} · Review：{status}")
+    steps = workflow.get("steps", [])
+    if steps:
+        st.write(" / ".join(str(step) for step in steps))
+    issues = review.get("issues", [])
+    if issues:
+        st.warning("ReviewAgent 发现任务需要检查。")
+        st.json(issues)
+
+
+def render_task_result(result: dict):
+    render_workflow_summary(result.get("workflow", {}))
+    tasks = result.get("tasks", [])
+    refs = result.get("references", [])
+    if not tasks:
+        st.info("暂无任务结果。")
+        return
+    for task in tasks:
+        title = task.get("title", "未命名任务")
+        status = task.get("status", "TODO")
+        source_count = len(refs)
+        with st.expander(f"{title} · {status} · {source_count} 个来源", expanded=True):
+            st.write(task.get("description", ""))
+            cols = st.columns(4)
+            cols[0].metric("类型", task.get("task_type", "-"))
+            cols[1].metric("优先级", task.get("priority", "-"))
+            cols[2].metric("难度", task.get("difficulty", "-"))
+            cols[3].metric("预估工时", task.get("estimated_hours", "-"))
+            st.write(f"依赖：{task.get('dependency') or '无'}")
+            st.write(f"交付物：{task.get('deliverable') or '未填写'}")
+            render_references(refs, title="任务来源")
+
+
+def render_recent_tasks():
+    tasks = _load_tasks()
+    if not tasks:
+        st.caption("暂无已保存任务。")
+        return
+    for task in tasks[:8]:
+        task_id = task.get("id")
+        label = f"#{task_id} {task.get('title', '未命名任务')} · {task.get('status', '-')}"
+        with st.expander(label, expanded=False):
+            cols = st.columns(4)
+            cols[0].metric("类型", task.get("task_type", "-"))
+            cols[1].metric("优先级", task.get("priority", "-"))
+            cols[2].metric("工时", task.get("estimated_hours", "-"))
+            cols[3].metric("来源数", task.get("source_count", 0))
+            if task_id and st.button("查看详情和来源", key=f"task_detail_{task_id}"):
+                ok, detail = _load_task_detail(int(task_id))
+                if ok:
+                    st.session_state[f"task_detail_result_{task_id}"] = detail
+                else:
+                    st.error(detail)
+            detail = st.session_state.get(f"task_detail_result_{task_id}")
+            if detail:
+                task_detail = detail.get("task", {})
+                st.write(task_detail.get("description", ""))
+                st.write(f"交付物：{task_detail.get('deliverable') or '未填写'}")
+                render_references(detail.get("sources", []), title="已绑定来源")
+
+
+def render_workbench_tools():
+    with st.container():
+        st.markdown("#### 资料检索与任务拆解")
+        rag_tab, task_tab, llm_tab = st.tabs(["RAG 调试", "任务拆解", "LLM 诊断"])
+
+        with rag_tab:
+            with st.form("rag_debug_form"):
+                question = st.text_input("调试问题", placeholder="例如：这个比赛评分标准是什么？")
+                col_topk, col_threshold = st.columns([1, 1])
+                top_k = col_topk.number_input("Top K", min_value=1, max_value=20, value=DEFAULT_TOP_K, step=1)
+                use_threshold = col_threshold.checkbox("启用相似度阈值")
+                threshold = None
+                if use_threshold:
+                    threshold = st.slider("相似度阈值", min_value=-1.0, max_value=1.0, value=0.0, step=0.05)
+                submitted = st.form_submit_button("检索调试", use_container_width=True)
+            if submitted:
+                if not question.strip():
+                    st.warning("请输入调试问题。")
+                else:
+                    ok, result = _rag_debug(question.strip(), int(top_k), threshold)
+                    if ok:
+                        st.session_state.rag_debug_result = result
+                    else:
+                        st.error(result)
+            if st.session_state.rag_debug_result:
+                result = st.session_state.rag_debug_result
+                st.caption(f"Embedding：{result.get('embedding_mode', '-')}")
+                render_references(result.get("references", []), title="检索结果")
+
+        with task_tab:
+            with st.form("task_generate_form"):
+                query = st.text_area("任务目标", placeholder="例如：根据已上传赛题生成 7 天 MVP 任务拆解", height=90)
+                context_hint = st.text_area("补充要求", placeholder="例如：优先保证可演示闭环，任务按前后端/RAG/测试拆分", height=80)
+                top_k = st.number_input("任务检索 Top K", min_value=1, max_value=20, value=DEFAULT_TOP_K, step=1)
+                submitted = st.form_submit_button("生成任务拆解", use_container_width=True)
+            if submitted:
+                if not query.strip():
+                    st.warning("请输入任务目标。")
+                else:
+                    with st.spinner("正在生成任务拆解..."):
+                        ok, result = _generate_tasks(query.strip(), context_hint.strip(), int(top_k))
+                    if ok:
+                        st.session_state.task_generate_result = result
+                        st.success("任务拆解已生成并保存。")
+                    else:
+                        if isinstance(result, dict):
+                            st.error(_error_message(result.get("error_type") or result.get("message", "")))
+                            if result.get("workflow"):
+                                render_workflow_summary(result.get("workflow", {}))
+                        else:
+                            st.error(result)
+            if st.session_state.task_generate_result:
+                render_task_result(st.session_state.task_generate_result)
+            st.markdown("---")
+            st.caption("最近任务")
+            render_recent_tasks()
+
+        with llm_tab:
+            if st.button("检测模型服务", use_container_width=True):
+                with st.spinner("正在检测模型服务..."):
+                    ok, result = _llm_diagnostics()
+                st.session_state.llm_diagnostic_result = {"ok": ok, "result": result}
+            if st.session_state.llm_diagnostic_result:
+                ok = st.session_state.llm_diagnostic_result["ok"]
+                result = st.session_state.llm_diagnostic_result["result"]
+                if ok:
+                    st.success("模型服务可用。")
+                else:
+                    error_type = result.get("error_type") if isinstance(result, dict) else ""
+                    st.error(_error_message(error_type))
+                if isinstance(result, dict):
+                    safe_result = {
+                        "ok": result.get("ok"),
+                        "error_type": result.get("error_type"),
+                        "base_url": result.get("base_url"),
+                        "model": result.get("model"),
+                        "latency_ms": result.get("latency_ms"),
+                        "status_code": result.get("status_code"),
+                    }
+                    st.json(safe_result)
+                    if result.get("message") and not ok:
+                        st.caption(str(result.get("message"))[:500])
+                else:
+                    st.caption(str(result))
+
+
 
 # ── Chat Area ──────────────────────────────────────────────────────────
 
@@ -617,22 +888,23 @@ def render_chat_area():
                     use_container_width=True,
                 ):
                     _handle_query(prompt)
-                    st.rerun()
     else:
         for item in current_messages:
             render_message(item)
 
 
 def _handle_query(text: str):
-    """添加用户消息，执行查询，通过 SSE 流式展示回答，通过 API 更新助手回复"""
+    """添加用户消息，执行查询，通过 st.write_stream 实时流式展示回答"""
+    import queue
+    import threading
 
-    # 1. 立即显示用户消息气泡（ChatGPT 风格：右对齐、浅蓝背景）
+    # 1. 显示用户消息
     st.markdown(
         f'<div class="user-message"><div class="user-bubble">{escape(text)}</div></div>',
         unsafe_allow_html=True,
     )
 
-    # 2. 发送用户消息到后端数据库
+    # 2. 保存用户消息
     conv_id = st.session_state.current_conv_id
     try:
         _api_post_json(f"/conversations/{conv_id}/messages", {
@@ -642,171 +914,139 @@ def _handle_query(text: str):
     except Exception as e:
         print(f"[Handle] 保存用户消息失败: {type(e).__name__}: {e}")
 
-    # 标题由后端 add_message 在第一条用户消息时自动更新，无需前端额外调用
-
-    # 构建历史消息
+    # 3. 构建历史消息
     history = []
     for item in _get_current_messages()[-4:]:
         history.append({"role": "user", "content": item["user"][:2000]})
         if item["assistant"].get("answer") and item["assistant"].get("kind") != "loading":
             history.append({"role": "assistant", "content": item["assistant"]["answer"][:2000]})
 
-    # 显示加载状态
-    result = None
-    full_answer = ""
+    # 4. 后台线程读 SSE，主线程通过 st.write_stream 实时渲染
+    token_queue: queue.Queue = queue.Queue()
     references: list[dict] = []
+    collected_answer: list[str] = []
+    stream_error: list[str] = []
 
-    # Streaming text placeholder - placed OUTSIDE and BEFORE the status block
-    # to render at full width (not constrained by status widget layout).
-    answer_placeholder = st.empty()
-
-    with st.status("正在分析资料...", expanded=True) as status:
-        status.write("正在检索相关资料...")
-
-        # ── SSE 流式查询 ──
+    def _sse_reader():
         try:
-            print(f"[Handle] 正在发送 SSE 流式请求到 {API_BASE_URL}/rag/query ...")
             resp = requests.post(
                 f"{API_BASE_URL}/rag/query",
-                json={"question": text, "top_k": DEFAULT_TOP_K, "history": history, "stream": True, "model": st.session_state.selected_model},
+                json={"question": text, "top_k": DEFAULT_TOP_K, "stream": True, "history": history},
                 headers=_api_headers(),
                 stream=True,
                 timeout=120,
             )
             resp.raise_for_status()
-            print(f"[Handle] SSE 响应状态码: {resp.status_code}, content-type: {resp.headers.get('content-type', 'unknown')}")
-
             content_type = resp.headers.get("content-type", "")
-            if "text/event-stream" in content_type:
-                # 正常 SSE 流式处理
-                status.write("正在生成回答...")
-                answer_tokens: list[str] = []
 
-                for raw_line in resp.iter_lines(decode_unicode=True):
-                    if raw_line is None:
-                        continue
-                    line = raw_line.strip()
-                    if not line or not line.startswith("data:"):
-                        continue
-
-                    data_str = line[len("data:"):].strip()
-                    if data_str == "[DONE]":
-                        break
-
-                    try:
-                        event = json.loads(data_str)
-                    except json.JSONDecodeError:
-                        continue
-
-                    event_type = event.get("type", "")
-                    if event_type == "meta":
-                        references = event.get("references", [])
-                    elif event_type == "token":
-                        token = event.get("token", "")
-                        if token:
-                            answer_tokens.append(token)
-                            # Update streaming placeholder to show live text
-                            answer_placeholder.markdown(
-                                f'<div class="assistant-content">{escape("".join(answer_tokens))}</div>',
-                                unsafe_allow_html=True,
-                            )
-
+            if "text/event-stream" not in content_type:
                 resp.close()
-                full_answer = "".join(answer_tokens)
-                print(f"[Handle] SSE 流式读取完成，回答长度: {len(full_answer)} 字符")
-
-                if full_answer:
-                    result = {
-                        "kind": "qa",
-                        "answer": full_answer,
-                        "references": references,
-                        "steps": [
-                            "分析问题：识别用户查询目标",
-                            "检索资料：定位相关文档片段",
-                            "整理回答：基于资料生成结果",
-                        ],
-                    }
-                else:
-                    # SSE 流为空，走 fallback
-                    print("[Handle] SSE 流返回内容为空，降级到普通请求")
-                    raise ValueError("SSE stream returned empty")
-
-            else:
-                # 后端未返回 SSE，走 fallback（JSON 响应）
-                resp.close()
-                print(f"[Handle] 后端未返回 SSE 格式 (content-type: {content_type})，降级到普通请求")
-                raise ValueError("Non-SSE response")
-
-        except Exception as e:
-            print(f"[Handle] SSE 请求异常: {type(e).__name__}: {e}")
-            # ── 降级：普通请求 ──
-            try:
-                print(f"[Handle] 正在发送普通请求到 {API_BASE_URL}/rag/query ...")
-                resp = _api_post_json("/rag/query", {"question": text, "top_k": DEFAULT_TOP_K, "history": history, "model": st.session_state.selected_model})
-                payload = resp.json()
-                print(f"[Handle] 普通请求响应状态码: {resp.status_code}")
-                if resp.status_code == 200 and payload.get("code") == 200:
+                try:
+                    payload = resp.json()
+                except (ValueError, TypeError):
+                    token_queue.put(("error", "模型服务返回异常，请稍后重试"))
+                    return
+                if payload.get("code") == 200:
                     data = payload.get("data", {})
-                    full_answer = data.get("answer", "")
-                    references = data.get("references", [])
-                    result = {
-                        "kind": "qa",
-                        "answer": full_answer,
-                        "references": references,
-                        "steps": [
-                            "分析问题：识别用户查询目标",
-                            "检索资料：定位相关文档片段",
-                            "整理回答：基于资料生成结果",
-                        ],
-                    }
+                    references.extend(data.get("references", []))
+                    token_queue.put(("answer", data.get("answer", "")))
                 else:
-                    print(f"[Handle] 普通请求失败，后端返回: {payload.get('message', 'unknown')}")
-                    result = {"kind": "error", "answer": _error_message(payload.get("message", ""))}
-            except Exception as e2:
-                print(f"[Handle] 普通请求也失败了: {type(e2).__name__}: {e2}")
-                result = {"kind": "error", "answer": "请求失败，请稍后重试。"}
+                    token_queue.put(("error", _error_message(payload.get("message", ""))))
+                return
 
-        # 更新加载状态
-        if result and result.get("kind") == "error":
-            status.update(label="分析失败", state="error")
-        else:
-            status.update(label="分析完成", state="complete")
+            for raw_line in resp.iter_lines(decode_unicode=True):
+                if raw_line is None:
+                    continue
+                line = raw_line.strip()
+                if not line or not line.startswith("data:"):
+                    continue
+                data_str = line[len("data:"):].strip()
+                if data_str == "[DONE]":
+                    break
+                try:
+                    event = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+                event_type = event.get("type", "")
+                if event_type == "meta":
+                    references.extend(event.get("references", []))
+                elif event_type == "token":
+                    token = event.get("token", "")
+                    if token:
+                        token_queue.put(("token", token))
+            resp.close()
+            token_queue.put(("done", ""))
+        except Exception as e:
+            print(f"[Handle] SSE 异常: {type(e).__name__}: {e}")
+            token_queue.put(("error", f"请求失败：{e}"))
 
-    # ── 在 status 容器外面渲染 AI 回答（左对齐，宽度限制在 80% 以内）──
-    # Clear the streaming placeholder - final render goes after the status block
-    answer_placeholder.empty()
+    t = threading.Thread(target=_sse_reader, daemon=True)
+    t.start()
 
-    if result and result.get("kind") == "error":
-        st.error(result.get("answer", "发生未知错误"))
-    else:
-        # XSS 防护：对 LLM 输出进行转义处理
-        if full_answer:
-            st.markdown(
-                f'<div class="assistant-content">{escape(full_answer)}</div>',
-                unsafe_allow_html=True,
-            )
+    # 5. st.write_stream 是 Streamlit 唯一支持实时流式渲染的 API
+    def _token_stream():
+        while True:
+            try:
+                kind, value = token_queue.get(timeout=120)
+            except queue.Empty:
+                yield "\n\n[响应超时]"
+                break
+            if kind == "token":
+                collected_answer.append(value)
+                yield value
+            elif kind == "answer":
+                collected_answer.clear()
+                collected_answer.append(value)
+                yield value
+                break
+            elif kind == "error":
+                stream_error.clear()
+                message = _error_message(value)
+                stream_error.append(message)
+                yield f"\n\n{message}"
+                break
+            elif kind == "done":
+                break
 
-        # 引用来源也渲染在 status 容器外面
-        if references:
-            refs_html = '<div class="ref-section">'
-            refs_html += '<div style="font-size:12px;color:#888;margin-bottom:4px;font-weight:600;">引用来源</div>'
-            for ref in references:
-                score = round(float(ref.get("score", 0)), 4)
-                ref_file = escape(str(ref.get("source_file", "未命名资料")))
-                refs_html += f'<div class="ref-item">{ref_file} (相似度 {score})</div>'
-            refs_html += '</div>'
-            st.markdown(refs_html, unsafe_allow_html=True)
+    # 用全宽列容器包裹，绕过 Streamlit 默认 max-width 限制
+    full_width_col, = st.columns([1])
+    with full_width_col:
+        st.write_stream(_token_stream())
 
-    # 通过 API 发送助手回复
-    if result is None:
-        result = {"kind": "error", "answer": "操作未完成，请稍后重试。"}
+    # 6. 保存助手回复
+    full_answer = "".join(collected_answer).strip()
+
     try:
+        if stream_error:
+            result = {"kind": "error", "answer": stream_error[-1]}
+        else:
+            result = {
+                "kind": "qa",
+                "answer": full_answer,
+                "references": references,
+                "steps": [
+                    "分析问题：识别用户查询目标",
+                    "检索资料：定位相关文档片段",
+                    "整理回答：基于资料生成结果",
+                ],
+            }
         _api_post_json(f"/conversations/{conv_id}/messages", {
             "role": "assistant",
             "content": json.dumps(result, ensure_ascii=False),
         })
     except Exception as e:
         print(f"[Handle] 保存助手回复失败: {type(e).__name__}: {e}")
+
+    # 7. 渲染引用来源
+    if references:
+        refs_html = '<div class="ref-section">'
+        refs_html += '<div style="font-size:12px;color:#888;margin-bottom:4px;font-weight:600;">引用来源</div>'
+        for ref in references:
+            score = round(float(ref.get("score", 0)), 4)
+            ref_file = escape(str(ref.get("source_file", "未命名资料")))
+            refs_html += f'<div class="ref-item">{ref_file} (相似度 {score})</div>'
+        refs_html += '</div>'
+        st.markdown(refs_html, unsafe_allow_html=True)
 
 
 # ── Input Toolbar & Model Selector ────────────────────────────────────
@@ -936,12 +1176,28 @@ def main():
         initial_sidebar_state="expanded",
     )
     inject_custom_css()
+    # 用 JS 强制覆盖 Streamlit 内置 max-width 限制
+    components.html(
+        """<script>
+        function forceFullWidth() {
+            document.querySelectorAll('.block-container').forEach(el => {
+                el.style.maxWidth = '100%';
+                el.style.paddingLeft = '2rem';
+                el.style.paddingRight = '2rem';
+            });
+        }
+        forceFullWidth();
+        new MutationObserver(forceFullWidth).observe(document.body, {childList: true, subtree: true});
+        </script>""",
+        height=0,
+    )
     init_session_state()
 
     with st.sidebar:
         render_sidebar()
 
     render_chat_header()
+    render_workbench_tools()
     render_chat_area()
 
     # 渲染添加模型弹窗（如果有）
@@ -954,10 +1210,6 @@ def main():
     user_input = st.chat_input("输入消息，Enter 发送，Shift+Enter 换行...", max_chars=2000)
     if user_input:
         _handle_query(user_input)
-        st.rerun()
 
 
-if __name__ == "__main__":
-    main()
-else:
-    main()
+main()

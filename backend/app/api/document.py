@@ -3,12 +3,12 @@ from fastapi import APIRouter, File, Request, UploadFile
 from app.db.database import get_db
 from app.model.response import ApiResponse
 from app.service.document_service import DocumentService
-from app.service.vector_service import VectorService
+from app.service.vector_store_factory import create_vector_store
 from app.utils.logger import get_logger
 
 router = APIRouter()
 document_service = DocumentService()
-vector_service = VectorService()
+vector_service = create_vector_store()
 logger = get_logger(__name__)
 
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB

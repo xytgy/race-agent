@@ -19,6 +19,8 @@ services:
       context: .
       dockerfile: frontend/Dockerfile
     container_name: raceagent-frontend
+    env_file:
+      - .env
     environment:
       - API_BASE_URL=http://backend:8000
       - DATA_DIR=/app/data

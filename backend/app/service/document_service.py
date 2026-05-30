@@ -7,7 +7,7 @@ from PyPDF2 import PdfReader
 
 from app.config.settings import settings
 from app.db.database import get_db
-from app.utils.chunk import chunk_text
+from app.utils.chunk import TextPage, chunk_pages
 
 
 class DocumentService:
@@ -20,11 +20,17 @@ class DocumentService:
         self.chunk_dir.mkdir(parents=True, exist_ok=True)
 
     def _extract_text(self, file_path: Path, file_type: str) -> str:
+        return "\n\n".join(page.content for page in self._extract_pages(file_path, file_type))
+
+    def _extract_pages(self, file_path: Path, file_type: str) -> list[TextPage]:
         if file_type in {"md", "txt"}:
-            return file_path.read_text(encoding="utf-8", errors="ignore")
+            return [TextPage(content=file_path.read_text(encoding="utf-8", errors="ignore"))]
         if file_type == "pdf":
             reader = PdfReader(str(file_path))
-            return "\n".join((page.extract_text() or "") for page in reader.pages)
+            return [
+                TextPage(content=page.extract_text() or "", page_no=idx)
+                for idx, page in enumerate(reader.pages, start=1)
+            ]
         raise ValueError(f"unsupported_file_type: {file_type}")
 
     def upload_and_process(self, file_name: str, content: bytes) -> dict:
@@ -61,18 +67,23 @@ class DocumentService:
             )
 
         try:
-            text = self._extract_text(file_path, suffix)
-            chunks = chunk_text(text, chunk_size=800, chunk_overlap=100)
+            pages = self._extract_pages(file_path, suffix)
+            chunks = chunk_pages(pages, chunk_size=800, chunk_overlap=100)
             chunk_payload = []
-            for idx, chunk in enumerate(chunks, start=1):
+            for chunk in chunks:
                 chunk_payload.append(
                     {
-                        "chunk_id": f"{document_id}_chunk_{idx:04d}",
+                        "chunk_id": f"{document_id}_chunk_{chunk.chunk_index:04d}",
                         "document_id": document_id,
                         "source_file": file_name,
-                        "chunk_index": idx,
-                        "content": chunk,
-                        "page_no": None,
+                        "file_type": suffix,
+                        "chunk_index": chunk.chunk_index,
+                        "total_chunks": len(chunks),
+                        "content": chunk.content,
+                        "page_no": chunk.page_no,
+                        "section": chunk.section,
+                        "char_start": chunk.char_start,
+                        "char_end": chunk.char_end,
                     }
                 )
             (self.chunk_dir / f"{document_id}.json").write_text(

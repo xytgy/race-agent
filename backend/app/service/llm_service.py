@@ -5,6 +5,7 @@ from typing import Any
 import requests
 
 from app.config.settings import settings
+from app.utils.errors import classify_llm_error
 from app.utils.logger import get_logger
 
 
@@ -40,7 +41,10 @@ class LLMService:
                 latency_ms = int((time.perf_counter() - started) * 1000)
                 resp.raise_for_status()
                 raw = resp.text
-                data = resp.json()
+                try:
+                    data = resp.json()
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f"invalid_llm_response: {exc}") from exc
                 answer = (
                     data.get("choices", [{}])[0]
                     .get("message", {})
@@ -60,16 +64,19 @@ class LLMService:
                 return answer or "(empty response)"
             except Exception as exc:
                 last_error = exc
+                error_type = classify_llm_error(str(exc))
                 self.logger.error(
                     "llm_call_failed",
                     extra={
                         "request_id": request_id,
                         "attempt": attempt,
+                        "error_type": error_type,
                         "error": str(exc),
                     },
                 )
 
-        raise RuntimeError(f"llm_call_failed: {last_error}")
+        error_type = classify_llm_error(str(last_error))
+        raise RuntimeError(f"llm_call_failed:{error_type}: {last_error}")
 
     def chat(self, message: str, request_id: str = "-") -> str:
         return self.chat_messages([{"role": "user", "content": message}], request_id=request_id)
@@ -118,17 +125,81 @@ class LLMService:
                             token = delta.get("content", "")
                             if token:
                                 yield token
-                        except (json.JSONDecodeError, IndexError, KeyError):
-                            continue
+                        except (json.JSONDecodeError, IndexError, KeyError) as exc:
+                            raise ValueError(f"invalid_llm_response: {exc}") from exc
                     return
             except Exception as exc:
                 last_error = exc
+                error_type = classify_llm_error(str(exc))
                 self.logger.error(
                     "llm_stream_failed",
                     extra={
                         "request_id": request_id,
                         "attempt": attempt,
+                        "error_type": error_type,
                         "error": str(exc),
                     },
                 )
-        raise RuntimeError(f"llm_stream_failed: {last_error}")
+        error_type = classify_llm_error(str(last_error))
+        raise RuntimeError(f"llm_stream_failed:{error_type}: {last_error}")
+
+    def diagnose(self, request_id: str = "-") -> dict:
+        url = f"{settings.llm_base_url.rstrip('/')}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {settings.llm_api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": settings.llm_model,
+            "messages": [{"role": "user", "content": "ping"}],
+            "temperature": 0,
+            "max_tokens": 1,
+        }
+        started = time.perf_counter()
+        try:
+            resp = requests.post(
+                url,
+                headers=headers,
+                json=payload,
+                timeout=settings.llm_timeout_seconds,
+            )
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            resp.raise_for_status()
+            try:
+                data = resp.json()
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"invalid_llm_response: {exc}") from exc
+            choices = data.get("choices", [])
+            if not isinstance(choices, list) or not choices:
+                raise ValueError("invalid_llm_response: missing choices")
+            return {
+                "ok": True,
+                "error_type": "",
+                "message": "success",
+                "base_url": settings.llm_base_url.rstrip("/"),
+                "model": settings.llm_model,
+                "latency_ms": latency_ms,
+                "status_code": resp.status_code,
+            }
+        except Exception as exc:
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            error_type = classify_llm_error(str(exc))
+            self.logger.warning(
+                "llm_diagnostic_failed",
+                extra={
+                    "request_id": request_id,
+                    "error_type": error_type,
+                    "error": str(exc),
+                    "latency_ms": latency_ms,
+                },
+            )
+            status_code = getattr(getattr(exc, "response", None), "status_code", None)
+            return {
+                "ok": False,
+                "error_type": error_type,
+                "message": str(exc),
+                "base_url": settings.llm_base_url.rstrip("/"),
+                "model": settings.llm_model,
+                "latency_ms": latency_ms,
+                "status_code": status_code,
+            }

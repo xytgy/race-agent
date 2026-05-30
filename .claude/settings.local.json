@@ -15,7 +15,11 @@
       "Bash(curl *)",
       "Bash(../.venv310/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000)",
       "Bash(echo \"Backend PID: $!\")",
-      "Bash(echo \"Backend: $!\")"
+      "Bash(echo \"Backend: $!\")",
+      "Bash(lsof -ti:8501)",
+      "Bash(xargs ps -p)",
+      "Bash(lsof -ti:8000)",
+      "Bash(xargs kill -9)"
     ]
   }
 }

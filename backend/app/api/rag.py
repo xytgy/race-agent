@@ -6,7 +6,7 @@ from fastapi.responses import StreamingResponse
 from app.model.request import RagQueryRequest
 from app.model.response import ApiResponse
 from app.service.rag_service import RAGService
-from app.utils.errors import map_llm_error
+from app.utils.errors import classify_llm_error, map_llm_error
 from app.utils.logger import get_logger
 
 router = APIRouter()
@@ -34,6 +34,7 @@ def rag_query(payload: RagQueryRequest, request: Request):
                 question,
                 top_k=payload.top_k,
                 request_id=request.state.request_id,
+                score_threshold=payload.score_threshold,
             )
 
             def event_generator():
@@ -48,8 +49,9 @@ def rag_query(payload: RagQueryRequest, request: Request):
                     logger.info("sse_client_disconnected", extra={"request_id": request.state.request_id})
                 except Exception as exc:
                     # 流式生成过程中发生异常，向前端发送错误事件
-                    logger.error("sse_stream_error", extra={"error": str(exc)})
-                    yield f"data: {json.dumps({'type': 'error', 'message': '流式输出异常，请重试'}, ensure_ascii=False)}\n\n"
+                    error_type = classify_llm_error(str(exc))
+                    logger.error("sse_stream_error", extra={"error_type": error_type, "error": str(exc)})
+                    yield f"data: {json.dumps({'type': 'error', 'message': error_type}, ensure_ascii=False)}\n\n"
                 finally:
                     yield "data: [DONE]\n\n"
 
@@ -68,6 +70,7 @@ def rag_query(payload: RagQueryRequest, request: Request):
             question,
             top_k=payload.top_k,
             request_id=request.state.request_id,
+            score_threshold=payload.score_threshold,
         )
         return ApiResponse(
             code=200,
@@ -85,6 +88,36 @@ def rag_query(payload: RagQueryRequest, request: Request):
         return ApiResponse(
             code=code,
             message=message,
+            data={"error_type": message} if message.startswith("llm_") else {},
+            request_id=request.state.request_id,
+        )
+
+
+@router.post("/rag/debug", response_model=ApiResponse)
+def rag_debug(payload: RagQueryRequest, request: Request):
+    try:
+        references, embedding_mode = rag_service.retrieve(
+            payload.question,
+            top_k=payload.top_k,
+            score_threshold=payload.score_threshold,
+        )
+        return ApiResponse(
+            code=200,
+            message="success",
+            data={
+                "question": payload.question,
+                "top_k": payload.top_k,
+                "score_threshold": payload.score_threshold,
+                "references": references,
+                "embedding_mode": embedding_mode,
+            },
+            request_id=request.state.request_id,
+        )
+    except Exception as exc:
+        logger.error("rag_debug_failed", extra={"error": str(exc)})
+        return ApiResponse(
+            code=500,
+            message="internal_error",
             data={},
             request_id=request.state.request_id,
         )

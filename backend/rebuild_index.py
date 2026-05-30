@@ -18,24 +18,19 @@ def main() -> None:
     setup_logging(settings.log_dir)
 
     vs = VectorService()
-    embedding_mode = vs.embedding_service.mode
-
-    print(f"Embedding 模式: {embedding_mode}")
-    if embedding_mode == "fallback_hash":
-        print("警告: 正在使用 fallback hash embedding，检索质量较差！")
-        print(f"请确保 BGE 模型已缓存到本地: ~/.cache/huggingface/hub/models--{settings.embedding_model.replace('/', '--')}/")
-        print("可运行以下命令下载模型:")
-        print(f"  python3 -c \"from sentence_transformers import SentenceTransformer; SentenceTransformer('{settings.embedding_model}')\"")
-        print()
 
     try:
         result = vs.rebuild_index()
+        embedding_mode = vs.embedding_service.mode
         print(f"索引重建完成:")
         print(f"  索引文件: {vs.index_path}")
         print(f"  元数据文件: {vs.meta_path}")
         print(f"  索引 chunks 数: {result['indexed_chunks']}")
         print(f"  向量维度: {result['dimension']}")
         print(f"  Embedding 模式: {embedding_mode}")
+        if embedding_mode == "fallback_hash":
+            print("提示: 正在使用内置中文 hash embedding。若需要更高质量检索，可配置远程 embedding 或安装本地模型。")
+            print("  pip install -r backend/requirements-embedding.txt")
 
         # 验证
         import json

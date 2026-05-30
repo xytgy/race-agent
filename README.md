@@ -30,11 +30,11 @@ RaceAgent 是一个端到端的竞赛辅助系统，通过 RAG（检索增强生
 | 层级 | 技术 |
 |------|------|
 | 后端框架 | FastAPI + Uvicorn |
-| 前端框架 | Streamlit + Streamlit Antd Components |
+| 前端框架 | Streamlit |
 | 数据库 | SQLite |
 | 向量检索 | FAISS (faiss-cpu) |
-| 文本嵌入 | HuggingFace sentence-transformers (BAAI/bge-small-zh-v1.5) |
-| LLM 接口 | OpenAI 兼容 API（通过环境变量配置） |
+| 文本嵌入 | 内置中文 hash fallback；可选远程 embedding 或本地 sentence-transformers |
+| LLM 接口 | 兼容 OpenAI Chat Completions 格式的模型服务（通过环境变量配置） |
 | PDF 解析 | PyPDF2 |
 | 容器化 | Docker Compose |
 
@@ -84,6 +84,13 @@ LLM_MODEL=gpt-4
 LLM_TIMEOUT_SECONDS=30
 LLM_MAX_RETRIES=2
 EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
+EMBEDDING_PROVIDER=fallback_hash
+EMBEDDING_BASE_URL=
+EMBEDDING_API_KEY=
+EMBEDDING_TIMEOUT_SECONDS=30
+EMBEDDING_MAX_RETRIES=1
+VECTOR_STORE=faiss
+TASK_WORKFLOW_ENGINE=simple
 DATA_DIR=data
 ```
 
@@ -306,10 +313,23 @@ http://localhost:8000/docs
 | `LLM_TIMEOUT_SECONDS` | 否 | `30` | API 请求超时时间（秒） |
 | `LLM_MAX_RETRIES` | 否 | `2` | API 请求最大重试次数 |
 | `EMBEDDING_MODEL` | 是 | - | 嵌入模型名称，用于文本向量化（默认 `BAAI/bge-small-zh-v1.5`） |
+| `EMBEDDING_PROVIDER` | 否 | `fallback_hash` | 默认使用内置中文 hash embedding；可设为 `remote`、`local`、`auto` |
+| `EMBEDDING_BASE_URL` | 否 | 复用 `LLM_BASE_URL` | 远程 Embedding API 基础 URL；不需要 OpenAI 账号，只要接口兼容 `/embeddings` |
+| `EMBEDDING_API_KEY` | 否 | 复用 `LLM_API_KEY` | Embedding API 密钥 |
+| `EMBEDDING_TIMEOUT_SECONDS` | 否 | `30` | Embedding 请求超时时间（秒） |
+| `EMBEDDING_MAX_RETRIES` | 否 | `1` | Embedding 请求最大重试次数 |
+| `VECTOR_STORE` | 否 | `faiss` | 向量库实现，当前支持 `faiss` |
+| `TASK_WORKFLOW_ENGINE` | 否 | `simple` | 任务生成编排引擎，可设为 `simple` 或 `langgraph` |
 | `DATA_DIR` | 是 | - | 数据存储目录 |
 | `API_KEY` | 是 | - | 接口鉴权密钥，客户端需在 `X-API-Key` 请求头中携带 |
 | `API_BASE_URL` | 否 | `http://localhost:8000` | 前端连接的后端地址（仅前端使用） |
 | `FRONTEND_SHOW_ADMIN_PAGES` | 否 | `false` | 是否在前端显示管理员页面（如日志查看） |
+
+默认后端镜像不安装 `sentence-transformers`，也不要求 OpenAI 账号，会使用内置中文 hash embedding，便于稳定构建和演示。若你有兼容 `/embeddings` 的远程服务，可以把 `EMBEDDING_PROVIDER` 设为 `remote`。若需要本地模型检索，可在后端环境额外安装：
+
+```bash
+pip install -r backend/requirements-embedding.txt
+```
 
 ---
 

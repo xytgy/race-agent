@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 import hmac
@@ -9,9 +10,11 @@ from app.api.health import router as health_router
 from app.api.chat import router as chat_router
 from app.api.document import router as document_router
 from app.api.rag import router as rag_router
+from app.api.task import router as task_router
 from app.api.analysis import router as analysis_router
 from app.api.log import router as log_router
 from app.api.conversation import router as conversation_router
+from app.api.diagnostics import router as diagnostics_router
 from app.config.settings import settings
 from app.db.database import init_db
 from app.service.log_service import LogService
@@ -28,6 +31,29 @@ app = FastAPI(title="RaceAgent API")
 log_service: LogService | None = None
 
 
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    request_id = getattr(request.state, "request_id", str(uuid4()))
+    logger.warning(
+        "request_validation_failed",
+        extra={
+            "request_id": request_id,
+            "path": request.url.path,
+            "error": str(exc),
+        },
+    )
+    return JSONResponse(
+        status_code=422,
+        content={
+            "code": 422,
+            "message": "validation_error",
+            "data": {"errors": exc.errors()},
+            "request_id": request_id,
+        },
+        headers={"X-Request-Id": request_id},
+    )
+
+
 @app.on_event("startup")
 async def startup_event():
     global log_service
@@ -35,8 +61,8 @@ async def startup_event():
 
     # 启动时确保 FAISS 索引与 chunks 目录一致
     try:
-        from app.service.vector_service import VectorService
-        vs = VectorService()
+        from app.service.vector_store_factory import create_vector_store
+        vs = create_vector_store()
         vs.ensure_index()
         logger.info("faiss_index_startup_check_done")
     except Exception as exc:
@@ -101,16 +127,22 @@ async def api_key_middleware(request: Request, call_next):
         return await call_next(request)
     # 如果服务端未配置 API_KEY，拒绝所有受保护请求
     if not settings.api_key:
+        request_id = getattr(request.state, "request_id", str(uuid4()))
+        request.state.request_id = request_id
         return JSONResponse(
             status_code=500,
-            content={"code": 500, "message": "API_KEY not configured on server", "data": {}, "request_id": ""},
+            content={"code": 500, "message": "API_KEY not configured on server", "data": {}, "request_id": request_id},
+            headers={"X-Request-Id": request_id},
         )
     # 检查 API Key
     api_key = request.headers.get("X-API-Key")
     if not api_key or not hmac.compare_digest(api_key, settings.api_key):
+        request_id = getattr(request.state, "request_id", str(uuid4()))
+        request.state.request_id = request_id
         return JSONResponse(
             status_code=401,
-            content={"code": 401, "message": "unauthorized", "data": {}, "request_id": ""},
+            content={"code": 401, "message": "unauthorized", "data": {}, "request_id": request_id},
+            headers={"X-Request-Id": request_id},
         )
     return await call_next(request)
 
@@ -130,6 +162,8 @@ app.include_router(health_router, tags=["health"])
 app.include_router(chat_router, tags=["chat"])
 app.include_router(document_router, tags=["document"])
 app.include_router(rag_router, tags=["rag"])
+app.include_router(task_router, tags=["task"])
 app.include_router(analysis_router, tags=["analysis"])
 app.include_router(log_router, tags=["log"])
 app.include_router(conversation_router, tags=["conversation"])
+app.include_router(diagnostics_router, tags=["diagnostics"])

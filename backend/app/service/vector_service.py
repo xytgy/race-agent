@@ -97,26 +97,44 @@ class VectorService:
             VectorService._cache_valid = True
             return index, metadata
 
-    def search(self, question: str, top_k: int = 3) -> tuple[list[dict], str]:
+    def search(
+        self,
+        question: str,
+        top_k: int = 3,
+        score_threshold: float | None = None,
+    ) -> tuple[list[dict], str]:
         self.ensure_index()
 
-        index, metadata = self._get_index_and_metadata()
-
         query = self.embedding_service.embed_text(question).astype(np.float32).reshape(1, -1)
+        index, metadata = self._get_index_and_metadata()
+        if query.shape[1] != index.d:
+            self.rebuild_index()
+            index, metadata = self._get_index_and_metadata()
+            query = self.embedding_service.embed_text(question).astype(np.float32).reshape(1, -1)
         scores, ids = index.search(query, top_k)
 
         results: list[dict] = []
         for score, idx in zip(scores[0], ids[0]):
             if idx < 0 or idx >= len(metadata):
                 continue
+            score_value = float(score)
+            if score_threshold is not None and score_value < score_threshold:
+                continue
             item = metadata[idx]
             full_content = item.get("content", "")
             results.append(
                 {
+                    "document_id": item.get("document_id"),
                     "source_file": item.get("source_file"),
+                    "file_type": item.get("file_type"),
                     "chunk_id": item.get("chunk_id"),
+                    "chunk_index": item.get("chunk_index"),
+                    "total_chunks": item.get("total_chunks"),
                     "page_no": item.get("page_no"),
-                    "score": float(score),
+                    "section": item.get("section"),
+                    "char_start": item.get("char_start"),
+                    "char_end": item.get("char_end"),
+                    "score": score_value,
                     "content": full_content,
                     "preview": full_content[:200],
                 }

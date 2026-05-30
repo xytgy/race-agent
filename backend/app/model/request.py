@@ -1,4 +1,4 @@
-from pydantic import BaseModel, constr
+from pydantic import BaseModel, Field, constr
 from typing import List, Literal, Optional
 
 
@@ -14,17 +14,18 @@ class ChatRequest(BaseModel):
 
 class RagQueryRequest(BaseModel):
     question: constr(max_length=2000)
-    top_k: int = 3
+    top_k: int = Field(default=3, ge=1, le=20)
+    score_threshold: Optional[float] = Field(default=None, ge=-1.0, le=1.0)
     history: Optional[List[ChatMessage]] = None
     stream: bool = False
 
 
 class AnalysisRequest(BaseModel):
     question: constr(max_length=2000)
-    top_k: int = 3
+    top_k: int = Field(default=3, ge=1, le=20)
 
 
 class TaskGenerateRequest(BaseModel):
     query: constr(max_length=2000)
     context_hint: constr(max_length=2000) = ""
-    top_k: int = 3
+    top_k: int = Field(default=3, ge=1, le=20)

@@ -32,7 +32,7 @@ def chat(payload: ChatRequest, request: Request):
         return ApiResponse(
             code=code,
             message=message,
-            data={},
+            data={"error_type": message} if message.startswith("llm_") else {},
             request_id=request.state.request_id,
         )
     return ApiResponse(

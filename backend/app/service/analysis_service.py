@@ -1,19 +1,32 @@
+from app.service.contracts import LLMClient, PromptRenderer, VectorStore
 from app.service.llm_service import LLMService
 from app.service.prompt_service import PromptService
-from app.service.vector_service import VectorService
+from app.service.vector_store_factory import create_vector_store
 
 
 class AnalysisService:
-    def __init__(self) -> None:
-        self.vector_service = VectorService()
-        self.prompt_service = PromptService()
-        self.llm_service = LLMService()
+    def __init__(
+        self,
+        vector_service: VectorStore | None = None,
+        prompt_service: PromptRenderer | None = None,
+        llm_service: LLMClient | None = None,
+    ) -> None:
+        self.vector_service = vector_service or create_vector_store()
+        self.prompt_service = prompt_service or PromptService()
+        self.llm_service = llm_service or LLMService()
 
     def _build_context(self, refs: list[dict]) -> str:
         lines: list[str] = []
         for i, r in enumerate(refs, start=1):
+            source_parts = [str(r.get("source_file") or "unknown")]
+            if r.get("page_no") is not None:
+                source_parts.append(f"page={r.get('page_no')}")
+            if r.get("section"):
+                source_parts.append(f"section={r.get('section')}")
+            if r.get("chunk_id"):
+                source_parts.append(f"chunk_id={r.get('chunk_id')}")
             lines.append(
-                f"[{i}] source_file={r.get('source_file')} chunk_id={r.get('chunk_id')} score={r.get('score'):.4f}\n{r.get('preview','')}"
+                f"[{i}] source={' | '.join(source_parts)} score={r.get('score'):.4f}\n{r.get('preview','')}"
             )
         return "\n\n".join(lines)
 

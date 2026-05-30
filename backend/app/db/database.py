@@ -64,6 +64,19 @@ def init_db() -> None:
               created_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS task_sources (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              task_id INTEGER NOT NULL,
+              document_id TEXT,
+              chunk_id TEXT,
+              source_file TEXT,
+              page_no INTEGER,
+              section TEXT,
+              score REAL,
+              created_at TEXT NOT NULL,
+              FOREIGN KEY (task_id) REFERENCES tasks(id)
+            );
+
             CREATE TABLE IF NOT EXISTS logs (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
               request_id TEXT NOT NULL,
