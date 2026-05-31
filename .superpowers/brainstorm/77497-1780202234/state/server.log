@@ -1,0 +1,2 @@
+{"type":"server-started","port":49695,"host":"127.0.0.1","url_host":"localhost","url":"http://localhost:49695","screen_dir":"/Users/xytgy/race-agent/.superpowers/brainstorm/77497-1780202234/content","state_dir":"/Users/xytgy/race-agent/.superpowers/brainstorm/77497-1780202234/state"}
+{"type":"server-stopped","reason":"owner process exited"}

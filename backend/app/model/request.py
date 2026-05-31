@@ -18,6 +18,7 @@ class RagQueryRequest(BaseModel):
     score_threshold: Optional[float] = Field(default=None, ge=-1.0, le=1.0)
     history: Optional[List[ChatMessage]] = None
     stream: bool = False
+    model: Optional[str] = Field(default=None, max_length=128)
 
 
 class AnalysisRequest(BaseModel):

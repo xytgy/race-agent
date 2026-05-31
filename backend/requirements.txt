@@ -10,3 +10,4 @@ numpy==1.26.4
 faiss-cpu==1.8.0
 packaging==24.2
 langgraph>=1.2,<2.0
+sentence-transformers>=2.2.0

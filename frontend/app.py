@@ -3,10 +3,10 @@ import json
 import time
 from datetime import datetime
 from html import escape
+from pathlib import Path
 
 import requests
 import streamlit as st
-import streamlit.components.v1 as components
 
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
@@ -24,22 +24,26 @@ DEFAULT_MODELS = [
 
 def _error_message(message: str) -> str:
     mapping = {
-        "llm_unauthorized": "模型服务认证失败，请检查 API Key。",
-        "llm_rate_limited": "模型服务繁忙，请稍后重试。",
+        "llm_unauthorized": "模型服务认证失败，请检查 LLM_API_KEY。",
+        "llm_rate_limited": "模型服务请求过于频繁，请稍后重试。",
         "llm_timeout": "模型响应超时，请稍后重试。",
-        "llm_connect_timeout": "连接模型服务超时，请检查模型服务地址或网络。",
+        "llm_connect_timeout": "无法连接模型服务，请检查 LLM_BASE_URL 是否正确。",
         "llm_read_timeout": "模型生成响应超时，请稍后重试或调大超时时间。",
-        "llm_ssl_error": "模型服务 SSL 连接失败，请检查模型服务地址、证书或网络代理。",
+        "llm_ssl_error": "模型服务 SSL 连接失败，请检查网络代理或证书配置。",
         "llm_bad_gateway": "模型服务网关异常，请稍后重试。",
         "llm_connection_error": "无法连接模型服务，请检查 LLM_BASE_URL。",
         "llm_invalid_response": "模型服务返回格式异常，请确认接口兼容 Chat Completions。",
         "llm_forbidden": "模型服务拒绝访问，请检查 API Key 权限。",
         "llm_upstream_error": "模型服务暂时不可用，请稍后再试。",
-        "vector_empty": "当前暂无可用资料，请先上传文档。",
-        "unauthorized": "接口鉴权失败，请检查前端是否配置 API_KEY。",
+        "llm_call_failed": "模型调用失败，请稍后重试。",
+        "llm_stream_failed": "模型流式输出中断，请稍后重试。",
+        "vector_empty": "当前暂无可用资料，请先上传文档后再提问。",
+        "unauthorized": "接口鉴权失败，请检查前端 API_KEY 配置。",
         "internal_error": "后端处理失败，请查看后端日志。",
+        "validation_error": "请求参数有误，请检查输入内容。",
+        "rag_query_failed": "资料检索失败，请稍后重试。",
     }
-    return mapping.get(message or "", "操作未完成，请稍后重试。")
+    return mapping.get(message or "", f"操作未完成（{message}），请稍后重试。")
 
 
 def _llm_diagnostics() -> tuple[bool, dict | str]:
@@ -300,147 +304,100 @@ def _upload_document(uploaded_file) -> tuple[bool, str]:
         return False, "上传失败，请稍后重试。"
 
 
+# ── 模拟 LLM 流式输出 ─────────────────────────────────────────────────
+
+def _mock_stream_response(question: str):
+    """模拟 LLM 流式输出，用于演示布局效果"""
+    response = f"""## 分析结果
+
+根据您提出的问题「{question}」，我为您进行了详细的分析：
+
+### 1. 核心要点
+
+- **关键信息提取**：从问题中识别出主要关注点
+- **数据分析**：基于已上传的资料进行深度检索
+- **结论生成**：综合多方面信息给出建议
+
+### 2. 详细回答
+
+这是一段详细的分析文本，用于展示流式输出的全宽效果。在实际应用中，这里会包含基于 RAG 检索到的具体内容，以及 LLM 生成的专业回答。
+
+文本应当能够充分利用聊天区域的宽度，而不是被限制在中间的狭窄区域内。这样可以提供更好的阅读体验，特别是在显示代码块、表格或长段落时。
+
+### 3. 建议
+
+1. 继续上传更多相关资料以提升回答质量
+2. 尝试更具体的问题以获得精准答案
+3. 可以使用任务拆解功能来制定详细计划
+
+---
+
+*此回答基于已上传资料的检索结果生成*"""
+
+    for char in response:
+        yield char
+        time.sleep(0.01)
+
+
 # ── Custom CSS ─────────────────────────────────────────────────────────
 
 def inject_custom_css():
+    css_path = Path(__file__).parent / "static" / "styles.css"
+    external_css = ""
+    if css_path.exists():
+        external_css = css_path.read_text(encoding="utf-8")
     st.markdown(
-        """
-        <style>
-        /* 全局 */
-        .stApp { background: #ffffff; font-family: "SF Pro Display", "PingFang SC", sans-serif; }
-        header[data-testid="stHeader"] { background: transparent !important; }
-
-        /* 侧边栏 - 深色 */
-        section[data-testid="stSidebar"] { background: #171717 !important; }
-        section[data-testid="stSidebar"] .stMarkdown,
-        section[data-testid="stSidebar"] .stMarkdown p,
-        section[data-testid="stSidebar"] .stMarkdown li,
-        section[data-testid="stSidebar"] .stMarkdown span,
-        section[data-testid="stSidebar"] label,
-        section[data-testid="stSidebar"] .stFileUploader label,
-        section[data-testid="stSidebar"] .stAlert p,
-        section[data-testid="stSidebar"] .stSpinner p { color: #ececec !important; }
-        section[data-testid="stSidebar"] .stMarkdown h1,
-        section[data-testid="stSidebar"] .stMarkdown h2,
-        section[data-testid="stSidebar"] .stMarkdown h3 { color: #ececec !important; }
-
-        /* 移除侧边栏顶部默认间距，让品牌紧贴左上角 */
-        section[data-testid="stSidebar"] > div:first-child {
-            padding-top: 0 !important;
-            margin-top: 0 !important;
+        "<style>" + external_css + """
+        .sidebar-brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 0;
+            margin: 0 0 12px 0;
         }
-        section[data-testid="stSidebar"] > div:first-child > div:first-child {
-            padding-top: 0 !important;
-            margin-top: 0 !important;
+        .sidebar-logo {
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            background: #d97706;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 11px;
         }
-
-        /* 侧边栏品牌 - 紧贴左上角 */
-        .sidebar-brand { display: flex; align-items: center; gap: 12px; padding: 0; margin: 0; margin-bottom: 8px; }
-        .sidebar-logo { width: 36px; height: 36px; border-radius: 50%; background: #10a37f; color: white; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; }
-        .sidebar-brand-text h3 { font-size: 15px; font-weight: 600; color: #ececec !important; margin: 0; }
-        .sidebar-brand-text p { font-size: 12px; color: #8e8e8e !important; margin: 0; }
-
-        /* 侧边栏导航 */
-        .sidebar-nav { padding: 8px 12px; }
-        .sidebar-nav-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px; color: #ececec !important; font-size: 14px; cursor: pointer; transition: background 0.15s; }
-        .sidebar-nav-item:hover { background: #212121; }
-        .sidebar-nav-item.active { background: #212121; }
-
-        /* 侧边栏文件上传 */
-        [data-testid="stFileUploaderDropzone"] { background: transparent !important; border: 1px dashed #424242 !important; border-radius: 8px !important; min-height: 60px !important; }
-        [data-testid="stFileUploaderDropzone"] button[kind="secondary"] { background: transparent !important; border: 1px solid #424242 !important; color: #ececec !important; border-radius: 8px !important; }
-
-        /* 侧边栏文件列表 */
-        .file-item { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-radius: 8px; color: #ececec !important; font-size: 13px; cursor: pointer; transition: background 0.15s; }
-        .file-item:hover { background: #212121; }
-
-        /* 侧边栏按钮 */
-        section[data-testid="stSidebar"] .stButton > button { background: transparent !important; color: #ececec !important; border: 1px solid #424242 !important; border-radius: 8px !important; }
-        section[data-testid="stSidebar"] .stButton > button:hover { background: #212121 !important; }
-
-        /* 聊天区 - 放宽正文区域 */
-        .chat-container { max-width: 1180px; margin: 0 auto; padding: 20px 28px; }
-
-        /* 顶部栏 */
-        .chat-header { position: sticky; top: 0; z-index: 999; display: flex; align-items: center; justify-content: space-between; padding: 12px 24px; background: rgba(255,255,255,0.95); backdrop-filter: blur(10px); border-bottom: 1px solid #f0f0f0; }
-        .chat-header-title { font-size: 16px; font-weight: 600; color: #1a1a1a; }
-
-        /* 消息 - 无气泡边框 */
-        .user-message { display: flex; justify-content: flex-end; margin-bottom: 16px; }
-        .user-bubble { max-width: 72%; background: #f0f4ff; color: #1a1a1a; border-radius: 16px; padding: 12px 16px; font-size: 15px; line-height: 1.6; }
-        .assistant-message { display: flex; gap: 0; margin-bottom: 16px; }
-        .assistant-content { width: 100%; max-width: 100%; font-size: 15px; line-height: 1.85; color: #1a1a1a; text-align: left; margin: 0; }
-
-        /* 思考步骤 - 折叠 */
-        .thinking-steps { background: #f8f9fa; border-radius: 8px; padding: 12px 16px; margin-bottom: 12px; border-left: 3px solid #10a37f; }
-        .thinking-step { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 13px; color: #666; }
-        .thinking-check { color: #10a37f; font-weight: 700; }
-
-        /* AI 回答卡片 - 无边框 */
-        .answer-card { width: 100%; max-width: 100%; background: transparent; border: none; padding: 0; font-size: 15px; line-height: 1.9; color: #1a1a1a; }
-
-        /* 引用来源 */
-        .ref-section { margin-top: 12px; padding-top: 12px; border-top: 1px solid #f0f0f0; }
-        .ref-item { font-size: 12px; color: #888; padding: 4px 0; }
-
-        /* 欢迎区 */
-        .welcome-section { text-align: center; padding: 80px 20px 40px; }
-        .welcome-title { font-size: 28px; font-weight: 700; color: #1a1a1a; margin-bottom: 12px; }
-        .welcome-subtitle { font-size: 15px; color: #666; }
-
-        /* 输入框 */
-        .stChatInput { border-radius: 24px !important; }
-        .stChatInput textarea { border-radius: 24px !important; font-size: 15px !important; }
-
-        /* 滚动条 */
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #d0d0d0; border-radius: 3px; }
-        ::-webkit-scrollbar-thumb:hover { background: #b0b0b0; }
-
-        /* 按钮 */
-        .stButton > button { border-radius: 8px !important; font-size: 14px !important; }
-        .stButton > button:hover { opacity: 0.85; }
-
-        /* 用户卡片 - 固定左下角 */
-        .fixed-user-card { position: fixed; bottom: 20px; left: 20px; background: #1a1a1a; color: #ececec; padding: 10px 16px; border-radius: 12px; z-index: 998; display: flex; align-items: center; gap: 10px; font-size: 13px; }
-
-        /* 流式输出占位符 - 确保左对齐 */
-        [data-testid="stMarkdownContainer"] > div > .assistant-content {
-            text-align: left !important;
-            margin-left: 0 !important;
-            margin-right: auto !important;
+        .sidebar-brand-text h3 {
+            font-size: 15px;
+            font-weight: 600;
+            color: #1a1a1a !important;
+            margin: 0;
         }
-
-        /* Streamlit 容器内的 assistant-content 强制左对齐 */
-        .stMarkdown .assistant-content,
-        div[data-testid="stMarkdown"] .assistant-content {
-            text-align: left !important;
+        .sidebar-brand-text p {
+            font-size: 12px;
+            color: #999 !important;
+            margin: 0;
         }
-
-        /* status 组件 - 左对齐 */
-        [data-testid="stStatus"] {
-            text-align: left !important;
-            align-items: flex-start !important;
+        .sidebar-section-label {
+            font-size: 11px;
+            color: #999;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+            padding: 0 2px;
         }
-        [data-testid="stStatus"] > div {
-            justify-content: flex-start !important;
+        .file-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 6px 8px;
+            border-radius: 6px;
+            font-size: 13px;
+            color: #333;
+            transition: background 0.15s;
         }
-
-        section.main .block-container,
-        section.main > div,
-        [data-testid="stAppViewContainer"] > div {
-            padding-bottom: 140px !important;
-            max-width: 100% !important;
-            padding-left: 2rem !important;
-            padding-right: 2rem !important;
-        }
-
-        /* 确保 st.write_stream 输出的 markdown 容器不限宽 */
-        div[data-testid="stMarkdown"],
-        div[data-testid="stMarkdownContainer"] {
-            max-width: 100% !important;
-            width: 100% !important;
+        .file-item:hover {
+            background: #f0eeeb;
         }
         </style>
         """,
@@ -481,7 +438,6 @@ def init_session_state():
 # ── Sidebar ────────────────────────────────────────────────────────────
 
 def render_sidebar():
-    # Brand
     st.markdown(
         """
         <div class="sidebar-brand">
@@ -495,18 +451,16 @@ def render_sidebar():
         unsafe_allow_html=True,
     )
 
-    # New session button
-    if st.button("+ 新建会话", use_container_width=True, key="new_session_btn"):
+    if st.button("+ 新建对话", use_container_width=True, key="new_session_btn"):
         _create_new_conversation()
         st.rerun()
 
     st.markdown("<div style='height: 8px'></div>", unsafe_allow_html=True)
 
-    # 会话列表
     for conv_id, conv in st.session_state.conversations.items():
         title = conv.get("title", "新对话")
         is_active = conv_id == st.session_state.current_conv_id
-        col1, col2 = st.columns([0.8, 0.2])
+        col1, col2 = st.columns([0.85, 0.15])
         with col1:
             label = f"{'● ' if is_active else ''}{title}"
             if st.button(label, key=f"conv_{conv_id}", use_container_width=True):
@@ -517,22 +471,14 @@ def render_sidebar():
                 _delete_conversation(conv_id)
                 st.rerun()
 
-    st.markdown("<div style='height: 8px'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='height: 12px'></div>", unsafe_allow_html=True)
 
-    # Navigation
-    st.markdown(
-        """
-        <div class="sidebar-nav">
-            <div class="sidebar-nav-item active">
-                <span>&#9633;</span>
-                <span>Agent 工作台</span>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    st.markdown("---")
 
-    # File uploader
+    docs = st.session_state.latest_docs
+    doc_count = len(docs) if docs else 0
+    st.markdown(f'<div class="sidebar-section-label">📁 资料库 ({doc_count})</div>', unsafe_allow_html=True)
+
     uploaded = st.file_uploader(
         "上传资料",
         type=["pdf", "md", "txt"],
@@ -548,11 +494,9 @@ def render_sidebar():
         else:
             st.error(message)
 
-    # File list - simplified, no status/chunks
-    docs = st.session_state.latest_docs
     if docs:
-        for i, doc in enumerate(docs):
-            col_file, col_del = st.columns([0.8, 0.2])
+        for i, doc in enumerate(docs[:3]):
+            col_file, col_del = st.columns([0.85, 0.15])
             with col_file:
                 st.markdown(
                     f'<div class="file-item">{escape(str(doc.get("file_name", "未命名资料")))}</div>',
@@ -565,62 +509,32 @@ def render_sidebar():
                         try:
                             resp = _api_delete(f"/documents/{doc_id}")
                             if resp.status_code == 200:
-                                # API 确认删除成功后，才修改本地状态
                                 st.session_state.latest_docs = [
                                     d for d in st.session_state.latest_docs if d.get("id") != doc_id
                                 ]
                         except Exception:
                             pass
                     st.rerun()
+        if doc_count > 3:
+            st.markdown(f'<div style="font-size:12px;color:#999;padding:4px 8px;">还有 {doc_count - 3} 个文件...</div>', unsafe_allow_html=True)
 
-    # 刷新按钮
-    if st.button("🔄 刷新资料列表", use_container_width=True, key="refresh_docs"):
-        st.session_state.latest_docs = _load_recent_docs()
-        st.rerun()
+    st.markdown("<div style='height: 12px'></div>", unsafe_allow_html=True)
 
-    st.markdown("<div style='height: 8px'></div>", unsafe_allow_html=True)
+    st.markdown("---")
 
-    # Spacer
-    st.markdown("<div style='flex:1'></div>", unsafe_allow_html=True)
-
-    # Fixed user card (bottom-left corner via CSS)
-    st.markdown(
-        """
-        <div class="fixed-user-card">
-            <div style="width:28px;height:28px;border-radius:50%;background:#10a37f;color:white;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;">U</div>
-            <span>用户</span>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    model_names = [m["name"] for m in st.session_state.available_models]
+    current_index = 0
+    for i, m in enumerate(st.session_state.available_models):
+        if m["id"] == st.session_state.selected_model:
+            current_index = i
+            break
+    selected = st.selectbox(
+        "模型选择", model_names, index=current_index,
+        key="model_selector_sidebar", label_visibility="collapsed",
     )
-
-
-# ── Chat Header ────────────────────────────────────────────────────────
-
-def render_chat_header():
-    col_left, col_right = st.columns([1, 0.15])
-    with col_left:
-        st.markdown(
-            """
-            <div class="chat-header">
-                <div class="chat-header-title">RaceAgent</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    with col_right:
-        if st.button("清空聊天", key="clear_chat", use_container_width=True):
-            conv_id = st.session_state.current_conv_id
-            # 通过 API 清空消息并更新标题
-            new_title = f"新对话 {len(st.session_state.conversations)}"
-            try:
-                _api_post_json(f"/conversations/{conv_id}/messages/replace", {"messages": []})
-            except Exception:
-                pass
-            _update_conversation_title(conv_id, new_title)
-            # 更新本地状态
-            if conv_id in st.session_state.conversations:
-                st.session_state.conversations[conv_id]["title"] = new_title
+    for m in st.session_state.available_models:
+        if m["name"] == selected and st.session_state.selected_model != m["id"]:
+            st.session_state.selected_model = m["id"]
             st.rerun()
 
 
@@ -642,40 +556,53 @@ def render_message(message: dict):
             pass
 
     elif kind == "error":
-        st.error(assistant.get("answer", "发生未知错误"))
+        _, mid, _ = st.columns([1, 8, 1])
+        with mid:
+            st.error(assistant.get("answer", "发生未知错误"))
 
     else:
-        # Thinking steps - collapsible expander
-        steps = assistant.get("steps", [])
-        if steps:
-            with st.expander("思考步骤", expanded=True):
-                steps_html = ""
-                for step in steps:
-                    steps_html += f"""
-                    <div class="thinking-step">
-                        <span class="thinking-check">&#10003;</span>
-                        <span>{escape(str(step))}</span>
-                    </div>
-                    """
-                st.markdown(steps_html, unsafe_allow_html=True)
+        _, mid, _ = st.columns([1, 8, 1])
+        with mid:
+            steps = assistant.get("steps", [])
+            if steps:
+                with st.expander("思考步骤", expanded=False):
+                    steps_html = ""
+                    for step in steps:
+                        steps_html += f"""
+                        <div class="thinking-step">
+                            <span class="thinking-check">&#10003;</span>
+                            <span>{escape(str(step))}</span>
+                        </div>
+                        """
+                    st.markdown(steps_html, unsafe_allow_html=True)
 
-        # Answer content - plain text, no border card
-        # XSS 防护：对 LLM 输出进行转义处理
-        answer_text = assistant.get("answer", "")
-        if answer_text:
-            st.markdown(f'<div class="answer-card">{escape(str(answer_text))}</div>', unsafe_allow_html=True)
+            answer_text = assistant.get("answer", "")
+            if answer_text:
+                st.markdown(
+                    f'<div class="assistant-message"><div class="assistant-bubble">{escape(str(answer_text))}</div></div>',
+                    unsafe_allow_html=True,
+                )
 
-        # References - small gray text at the end
-        refs = assistant.get("references", [])
-        if refs:
-            refs_html = '<div class="ref-section">'
-            refs_html += '<div style="font-size:12px;color:#888;margin-bottom:4px;font-weight:600;">引用来源</div>'
-            for ref in refs:
-                score = round(float(ref.get("score", 0)), 4)
-                ref_file = escape(str(ref.get("source_file", "未命名资料")))
-                refs_html += f'<div class="ref-item">{ref_file} (相似度 {score})</div>'
-            refs_html += '</div>'
-            st.markdown(refs_html, unsafe_allow_html=True)
+            refs = assistant.get("references", [])
+            if refs:
+                refs_html = '<div class="ref-section">'
+                refs_html += '<div style="font-size:12px;color:#888;margin-bottom:4px;font-weight:600;">引用来源</div>'
+                for ref in refs:
+                    score = round(float(ref.get("score", 0)), 4)
+                    ref_file = escape(str(ref.get("source_file", "未命名资料")))
+                    refs_html += f'<div class="ref-item">{ref_file} (相似度 {score})</div>'
+                refs_html += '</div>'
+                st.markdown(refs_html, unsafe_allow_html=True)
+
+            if answer_text:
+                btn_key = f"task_btn_{hash(answer_text[:50])}"
+                if st.button("📋 生成任务", key=btn_key):
+                    with st.spinner("正在生成任务拆解..."):
+                        ok, result = _generate_tasks(answer_text[:2000], answer_text[:500], 5)
+                    if ok:
+                        render_task_result(result)
+                    else:
+                        st.error(str(result))
 
 
 def _format_reference_label(ref: dict) -> str:
@@ -770,124 +697,21 @@ def render_recent_tasks():
                 render_references(detail.get("sources", []), title="已绑定来源")
 
 
-def render_workbench_tools():
-    with st.container():
-        st.markdown("#### 资料检索与任务拆解")
-        rag_tab, task_tab, llm_tab = st.tabs(["RAG 调试", "任务拆解", "LLM 诊断"])
-
-        with rag_tab:
-            with st.form("rag_debug_form"):
-                question = st.text_input("调试问题", placeholder="例如：这个比赛评分标准是什么？")
-                col_topk, col_threshold = st.columns([1, 1])
-                top_k = col_topk.number_input("Top K", min_value=1, max_value=20, value=DEFAULT_TOP_K, step=1)
-                use_threshold = col_threshold.checkbox("启用相似度阈值")
-                threshold = None
-                if use_threshold:
-                    threshold = st.slider("相似度阈值", min_value=-1.0, max_value=1.0, value=0.0, step=0.05)
-                submitted = st.form_submit_button("检索调试", use_container_width=True)
-            if submitted:
-                if not question.strip():
-                    st.warning("请输入调试问题。")
-                else:
-                    ok, result = _rag_debug(question.strip(), int(top_k), threshold)
-                    if ok:
-                        st.session_state.rag_debug_result = result
-                    else:
-                        st.error(result)
-            if st.session_state.rag_debug_result:
-                result = st.session_state.rag_debug_result
-                st.caption(f"Embedding：{result.get('embedding_mode', '-')}")
-                render_references(result.get("references", []), title="检索结果")
-
-        with task_tab:
-            with st.form("task_generate_form"):
-                query = st.text_area("任务目标", placeholder="例如：根据已上传赛题生成 7 天 MVP 任务拆解", height=90)
-                context_hint = st.text_area("补充要求", placeholder="例如：优先保证可演示闭环，任务按前后端/RAG/测试拆分", height=80)
-                top_k = st.number_input("任务检索 Top K", min_value=1, max_value=20, value=DEFAULT_TOP_K, step=1)
-                submitted = st.form_submit_button("生成任务拆解", use_container_width=True)
-            if submitted:
-                if not query.strip():
-                    st.warning("请输入任务目标。")
-                else:
-                    with st.spinner("正在生成任务拆解..."):
-                        ok, result = _generate_tasks(query.strip(), context_hint.strip(), int(top_k))
-                    if ok:
-                        st.session_state.task_generate_result = result
-                        st.success("任务拆解已生成并保存。")
-                    else:
-                        if isinstance(result, dict):
-                            st.error(_error_message(result.get("error_type") or result.get("message", "")))
-                            if result.get("workflow"):
-                                render_workflow_summary(result.get("workflow", {}))
-                        else:
-                            st.error(result)
-            if st.session_state.task_generate_result:
-                render_task_result(st.session_state.task_generate_result)
-            st.markdown("---")
-            st.caption("最近任务")
-            render_recent_tasks()
-
-        with llm_tab:
-            if st.button("检测模型服务", use_container_width=True):
-                with st.spinner("正在检测模型服务..."):
-                    ok, result = _llm_diagnostics()
-                st.session_state.llm_diagnostic_result = {"ok": ok, "result": result}
-            if st.session_state.llm_diagnostic_result:
-                ok = st.session_state.llm_diagnostic_result["ok"]
-                result = st.session_state.llm_diagnostic_result["result"]
-                if ok:
-                    st.success("模型服务可用。")
-                else:
-                    error_type = result.get("error_type") if isinstance(result, dict) else ""
-                    st.error(_error_message(error_type))
-                if isinstance(result, dict):
-                    safe_result = {
-                        "ok": result.get("ok"),
-                        "error_type": result.get("error_type"),
-                        "base_url": result.get("base_url"),
-                        "model": result.get("model"),
-                        "latency_ms": result.get("latency_ms"),
-                        "status_code": result.get("status_code"),
-                    }
-                    st.json(safe_result)
-                    if result.get("message") and not ok:
-                        st.caption(str(result.get("message"))[:500])
-                else:
-                    st.caption(str(result))
-
-
-
 # ── Chat Area ──────────────────────────────────────────────────────────
 
 def render_chat_area():
     current_messages = _get_current_messages()
     if not current_messages:
-        # ChatGPT-style centered welcome
         st.markdown(
             """
-            <div class="welcome-section">
-                <div class="welcome-title">RaceAgent</div>
-                <div class="welcome-subtitle">竞赛 AI 助手 — 帮你分析竞赛、生成计划、检索资料</div>
+            <div class="welcome-container">
+                <div style="font-size: 13px; color: #d97706; font-weight: 600; margin-bottom: 8px;">RaceAgent</div>
+                <div class="welcome-greeting">你好，我是 RaceAgent</div>
+                <div class="welcome-desc">竞赛 AI 助手，帮你分析规则、制定计划</div>
             </div>
             """,
             unsafe_allow_html=True,
         )
-
-        # Quick action cards - simpler style
-        quick_prompts = [
-            ("分析比赛", "帮我分析这个比赛的重点和评分关注点"),
-            ("做 MVP 计划", "生成 7 天 MVP 开发计划"),
-            ("梳理技术路线", "给我一套适合比赛的技术方案"),
-        ]
-        cols = st.columns(3)
-        for col, (title, prompt) in zip(cols, quick_prompts):
-            with col:
-                if st.button(
-                    f"{title}\n\n{prompt}",
-                    key=f"quick_{title}",
-                    use_container_width=True,
-                ):
-                    _handle_query(prompt)
     else:
         for item in current_messages:
             render_message(item)
@@ -985,13 +809,16 @@ def _handle_query(text: str):
 
     # 5. st.write_stream 是 Streamlit 唯一支持实时流式渲染的 API
     def _token_stream():
+        first_token = True
         while True:
             try:
                 kind, value = token_queue.get(timeout=120)
             except queue.Empty:
-                yield "\n\n[响应超时]"
+                yield "\n\n⚠️ 响应超时，请稍后重试。"
                 break
             if kind == "token":
+                if first_token:
+                    first_token = False
                 collected_answer.append(value)
                 yield value
             elif kind == "answer":
@@ -1003,18 +830,30 @@ def _handle_query(text: str):
                 stream_error.clear()
                 message = _error_message(value)
                 stream_error.append(message)
-                yield f"\n\n{message}"
+                yield f"\n\n⚠️ {message}"
                 break
             elif kind == "done":
                 break
 
-    # 用全宽列容器包裹，绕过 Streamlit 默认 max-width 限制
-    full_width_col, = st.columns([1])
-    with full_width_col:
-        st.write_stream(_token_stream())
+    loading_placeholder = st.empty()
+    loading_placeholder.markdown(
+        '<div style="color:#888;font-size:14px;padding:8px 0;">🤖 正在思考中...</div>',
+        unsafe_allow_html=True,
+    )
 
-    # 6. 保存助手回复
+    _, mid, _ = st.columns([1, 8, 1])
+    with mid:
+        def _stream_with_loading():
+            for token in _token_stream():
+                if loading_placeholder:
+                    loading_placeholder.empty()
+                yield token
+
+        st.write_stream(_stream_with_loading())
+
     full_answer = "".join(collected_answer).strip()
+    st.session_state["pending_references"] = references
+    st.session_state["pending_answer"] = full_answer
 
     try:
         if stream_error:
@@ -1037,179 +876,48 @@ def _handle_query(text: str):
     except Exception as e:
         print(f"[Handle] 保存助手回复失败: {type(e).__name__}: {e}")
 
-    # 7. 渲染引用来源
-    if references:
-        refs_html = '<div class="ref-section">'
-        refs_html += '<div style="font-size:12px;color:#888;margin-bottom:4px;font-weight:600;">引用来源</div>'
-        for ref in references:
-            score = round(float(ref.get("score", 0)), 4)
-            ref_file = escape(str(ref.get("source_file", "未命名资料")))
-            refs_html += f'<div class="ref-item">{ref_file} (相似度 {score})</div>'
-        refs_html += '</div>'
-        st.markdown(refs_html, unsafe_allow_html=True)
-
-
-# ── Input Toolbar & Model Selector ────────────────────────────────────
-
-def render_input_toolbar():
-    """渲染输入框工具栏 - 紧贴 chat_input 上方"""
-    # 工具栏布局：左(附件+代码) | 中(模型选择) | 右(语音+添加模型)
-    col_left, col_center, col_right = st.columns([1, 3, 1])
-
-    with col_left:
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("📎", key="toolbar_attach", help="附件"):
-                pass
-        with c2:
-            if st.button("⌨", key="toolbar_code", help="代码"):
-                pass
-
-    with col_center:
-        model_names = [m["name"] for m in st.session_state.available_models]
-        current_index = 0
-        for i, m in enumerate(st.session_state.available_models):
-            if m["id"] == st.session_state.selected_model:
-                current_index = i
-                break
-        selected = st.selectbox(
-            "模型", model_names, index=current_index,
-            key="model_selector_main", label_visibility="collapsed",
-        )
-        for m in st.session_state.available_models:
-            if m["name"] == selected and st.session_state.selected_model != m["id"]:
-                st.session_state.selected_model = m["id"]
-                st.rerun()
-
-    with col_right:
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("🎤", key="toolbar_voice", help="语音"):
-                pass
-        with c2:
-            if st.button("➕", key="toolbar_add_model", help="添加模型"):
-                st.session_state.show_add_model_dialog = True
-                st.rerun()
-
-
-def render_add_model_dialog():
-    """渲染添加自定义模型弹窗"""
-    if not st.session_state.get("show_add_model_dialog", False):
-        return
-
-    # 使用 st.container + form 实现弹窗效果
-    with st.container():
-        st.markdown("---")
-        with st.form("add_model_form", clear_on_submit=True):
-            st.markdown("### 添加自定义模型")
-
-            model_name = st.text_input(
-                "模型名称",
-                placeholder="例如: GPT-4",
-                help="给模型起一个友好的名称",
-            )
-            api_base = st.text_input(
-                "API Base URL",
-                placeholder="例如: https://api.openai.com/v1",
-                help="模型 API 的基础地址",
-            )
-            api_key = st.text_input(
-                "API Key",
-                type="password",
-                placeholder="输入 API Key",
-                help="用于认证的 API 密钥",
-            )
-            model_id = st.text_input(
-                "模型 ID",
-                placeholder="例如: gpt-4-turbo",
-                help="模型的实际标识符，用于 API 调用",
-            )
-
-            col1, col2, col3 = st.columns([1, 1, 1])
-            with col1:
-                if st.form_submit_button("保存", use_container_width=True, type="primary"):
-                    if model_name and model_id:
-                        new_model = {
-                            "id": model_id,
-                            "name": model_name,
-                            "type": "自定义",
-                            "api_base": api_base,
-                            "api_key": api_key,
-                        }
-                        st.session_state.available_models.append(new_model)
-                        st.session_state.selected_model = model_id
-                        st.session_state.show_add_model_dialog = False
-                        st.rerun()
-                    else:
-                        st.error("请填写模型名称和模型 ID")
-            with col2:
-                if st.form_submit_button("取消", use_container_width=True):
-                    st.session_state.show_add_model_dialog = False
-                    st.rerun()
-            with col3:
-                if st.form_submit_button("保存并继续添加", use_container_width=True):
-                    if model_name and model_id:
-                        new_model = {
-                            "id": model_id,
-                            "name": model_name,
-                            "type": "自定义",
-                            "api_base": api_base,
-                            "api_key": api_key,
-                        }
-                        st.session_state.available_models.append(new_model)
-                        st.session_state.selected_model = model_id
-                        # 不关闭弹窗，继续添加
-                        st.rerun()
-                    else:
-                        st.error("请填写模型名称和模型 ID")
-
-        st.markdown("---")
-
 
 # ── Main ───────────────────────────────────────────────────────────────
 
 def main():
+    # [关键修复点 1] 使用 layout="wide" 启用全宽布局
     st.set_page_config(
         page_title="RaceAgent",
         page_icon="🤖",
         layout="wide",
         initial_sidebar_state="expanded",
     )
+
+    # 注入自定义 CSS，移除所有 max-width 限制
     inject_custom_css()
-    # 用 JS 强制覆盖 Streamlit 内置 max-width 限制
-    components.html(
-        """<script>
-        function forceFullWidth() {
-            document.querySelectorAll('.block-container').forEach(el => {
-                el.style.maxWidth = '100%';
-                el.style.paddingLeft = '2rem';
-                el.style.paddingRight = '2rem';
-            });
-        }
-        forceFullWidth();
-        new MutationObserver(forceFullWidth).observe(document.body, {childList: true, subtree: true});
-        </script>""",
-        height=0,
-    )
+
     init_session_state()
 
     with st.sidebar:
         render_sidebar()
 
-    render_chat_header()
-    render_workbench_tools()
+    # ── 优化点 1：删除顶部标题栏 ──
+    # render_chat_header() 已移除
+
     render_chat_area()
-
-    # 渲染添加模型弹窗（如果有）
-    render_add_model_dialog()
-
-    # 渲染输入框工具栏（在 chat_input 之前，通过 Streamlit 原生组件渲染）
-    render_input_toolbar()
 
     # Chat input at the very bottom
     user_input = st.chat_input("输入消息，Enter 发送，Shift+Enter 换行...", max_chars=2000)
     if user_input:
         _handle_query(user_input)
+
+    pending_refs = st.session_state.pop("pending_references", None)
+    if pending_refs:
+        _, mid, _ = st.columns([1, 8, 1])
+        with mid:
+            refs_html = '<div class="ref-section">'
+            refs_html += '<div style="font-size:12px;color:#888;margin-bottom:4px;font-weight:600;">引用来源</div>'
+            for ref in pending_refs:
+                score = round(float(ref.get("score", 0)), 4)
+                ref_file = escape(str(ref.get("source_file", "未命名资料")))
+                refs_html += f'<div class="ref-item">{ref_file} (相似度 {score})</div>'
+            refs_html += '</div>'
+            st.markdown(refs_html, unsafe_allow_html=True)
 
 
 main()

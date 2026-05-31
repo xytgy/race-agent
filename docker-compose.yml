@@ -8,11 +8,14 @@ services:
       - .env
     environment:
       - DATA_DIR=/app/data
+      - HF_HOME=/root/.cache/huggingface
     ports:
       - "8000:8000"
     volumes:
       - ./data:/app/data
       - ./backend:/app/backend
+      - ~/.cache/huggingface:/root/.cache/huggingface
+      - backend-pip-packages:/usr/local/lib/python3.10/site-packages
 
   frontend:
     build:
@@ -31,3 +34,6 @@ services:
       - ./data:/app/data
     depends_on:
       - backend
+
+volumes:
+  backend-pip-packages:

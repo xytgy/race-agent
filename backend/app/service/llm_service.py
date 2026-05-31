@@ -13,20 +13,20 @@ class LLMService:
     def __init__(self) -> None:
         self.logger = get_logger(__name__)
 
-    def _build_payload(self, messages: list[dict[str, str]]) -> dict[str, Any]:
+    def _build_payload(self, messages: list[dict[str, str]], model: str | None = None) -> dict[str, Any]:
         return {
-            "model": settings.llm_model,
+            "model": model or settings.llm_model,
             "messages": messages,
             "temperature": 0.3,
         }
 
-    def chat_messages(self, messages: list[dict[str, str]], request_id: str = "-") -> str:
+    def chat_messages(self, messages: list[dict[str, str]], request_id: str = "-", model: str | None = None) -> str:
         url = f"{settings.llm_base_url.rstrip('/')}/chat/completions"
         headers = {
             "Authorization": f"Bearer {settings.llm_api_key}",
             "Content-Type": "application/json",
         }
-        payload = self._build_payload(messages)
+        payload = self._build_payload(messages, model=model)
 
         last_error: Exception | None = None
         for attempt in range(settings.llm_max_retries + 1):
@@ -81,7 +81,7 @@ class LLMService:
     def chat(self, message: str, request_id: str = "-") -> str:
         return self.chat_messages([{"role": "user", "content": message}], request_id=request_id)
 
-    def chat_stream(self, messages: list[dict[str, str]], request_id: str = "-"):
+    def chat_stream(self, messages: list[dict[str, str]], request_id: str = "-", model: str | None = None):
         """
         流式输出接口，使用 OpenAI 兼容 API 的 stream=True 参数。
         逐个 yield 每个 token 字符串。
@@ -91,7 +91,7 @@ class LLMService:
             "Authorization": f"Bearer {settings.llm_api_key}",
             "Content-Type": "application/json",
         }
-        payload = self._build_payload(messages)
+        payload = self._build_payload(messages, model=model)
         payload["stream"] = True
 
         last_error: Exception | None = None

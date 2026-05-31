@@ -92,6 +92,7 @@ class RAGService:
         top_k: int,
         request_id: str,
         score_threshold: float | None = None,
+        model: str | None = None,
     ):
         """
         流式查询：先检索参考文献，然后以 SSE 流式输出 LLM 生成的每个 token。
