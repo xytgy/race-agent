@@ -3,13 +3,33 @@
 【上下文】
 ${context}
 
-请只输出合法 JSON 数组，不要输出解释。
+请只输出合法 JSON 数组，不要输出任何解释文字。
+如果用户输入中包含比赛截止日期，请据此倒排时间，为每个任务分配合理的 deadline。
+
 每个任务对象字段必须包含：
-- title
-- description
-- task_type (ENV/BACKEND/RAG/AGENT/FRONTEND/MODEL/TEST/DOC/DEPLOY)
-- priority (HIGH/MEDIUM/LOW)
-- difficulty (HIGH/MEDIUM/LOW)
-- estimated_hours (number)
-- dependency
-- deliverable
+- title: 任务标题（简洁明确）
+- description: 任务描述（一两句话说明具体内容）
+- task_type: 任务类型，取值范围 ENV/BACKEND/RAG/AGENT/FRONTEND/MODEL/TEST/DOC/DEPLOY
+- priority: 优先级，取值 HIGH/MEDIUM/LOW
+- difficulty: 难度，取值 HIGH/MEDIUM/LOW
+- estimated_hours: 预估工时（数字）
+- dependency: 前置依赖（无则为空字符串）
+- deliverable: 交付物说明（一两句话）
+- suggested_deadline: 建议截止日期（YYYY-MM-DD 格式，无明确日期则留空）
+- assignee: 建议负责人角色（如"前端开发"、"后端开发"、"算法工程师"等，无则留空）
+
+示例输出格式：
+[
+  {
+    "title": "搭建后端 API 框架",
+    "description": "使用 FastAPI 初始化项目结构，创建基础接口",
+    "task_type": "BACKEND",
+    "priority": "HIGH",
+    "difficulty": "MEDIUM",
+    "estimated_hours": 8,
+    "dependency": "",
+    "deliverable": "可运行的 API 服务",
+    "suggested_deadline": "2026-06-07",
+    "assignee": "后端开发"
+  }
+]

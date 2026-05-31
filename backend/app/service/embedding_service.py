@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import re
 import time
+from collections import OrderedDict
 from typing import Any
 from typing import Iterable
 
@@ -14,6 +15,8 @@ from app.utils.logger import get_logger
 
 
 class EmbeddingService:
+    _CACHE_MAX_SIZE = 2048
+
     def __init__(self) -> None:
         self._model = None
         self._model_attempted = False
@@ -23,6 +26,7 @@ class EmbeddingService:
         self.fallback_version = "hash_char_ngram_v2"
         self.mode = "unknown"
         self.logger = get_logger(__name__)
+        self._cache: OrderedDict[str, np.ndarray] = OrderedDict()
 
     def _embedding_base_url(self) -> str:
         return (settings.embedding_base_url or settings.llm_base_url).rstrip("/")
@@ -163,18 +167,63 @@ class EmbeddingService:
             tokens.append((f"text:{normalized}", 1.0))
         return tokens
 
+    def _cache_key(self, text: str) -> str:
+        return hashlib.md5(text.encode("utf-8")).hexdigest()
+
+    def _cache_get(self, text: str) -> np.ndarray | None:
+        key = self._cache_key(text)
+        if key in self._cache:
+            self._cache.move_to_end(key)
+            return self._cache[key]
+        return None
+
+    def _cache_put(self, text: str, vector: np.ndarray) -> None:
+        key = self._cache_key(text)
+        if key in self._cache:
+            self._cache.move_to_end(key)
+        else:
+            if len(self._cache) >= self._CACHE_MAX_SIZE:
+                self._cache.popitem(last=False)
+        self._cache[key] = vector
+
     def embed_documents(self, texts: Iterable[str]) -> np.ndarray:
         texts = list(texts)
         if not texts:
             return []
-        remote_vectors = self._remote_embed_documents(texts)
-        if remote_vectors is not None:
-            return remote_vectors
-        model = self._load_model()
-        if model is None:
-            return np.vstack([self._fallback_embed_one(t) for t in texts])
-        vectors = model.encode(texts, normalize_embeddings=True)
-        return np.asarray(vectors, dtype=np.float32)
+
+        uncached_texts = []
+        uncached_indices = []
+        results = [None] * len(texts)
+
+        for i, text in enumerate(texts):
+            cached = self._cache_get(text)
+            if cached is not None:
+                results[i] = cached
+            else:
+                uncached_texts.append(text)
+                uncached_indices.append(i)
+
+        if uncached_texts:
+            remote_vectors = self._remote_embed_documents(uncached_texts)
+            if remote_vectors is not None:
+                new_vectors = remote_vectors
+            else:
+                model = self._load_model()
+                if model is None:
+                    new_vectors = np.vstack([self._fallback_embed_one(t) for t in uncached_texts])
+                else:
+                    new_vectors = model.encode(uncached_texts, normalize_embeddings=True)
+                    new_vectors = np.asarray(new_vectors, dtype=np.float32)
+
+            for idx, text, vector in zip(uncached_indices, uncached_texts, new_vectors):
+                self._cache_put(text, vector)
+                results[idx] = vector
+
+        return np.vstack(results)
 
     def embed_text(self, text: str) -> np.ndarray:
-        return self.embed_documents([text])[0]
+        cached = self._cache_get(text)
+        if cached is not None:
+            return cached
+        result = self.embed_documents([text])[0]
+        return result

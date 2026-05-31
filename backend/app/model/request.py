@@ -30,3 +30,10 @@ class TaskGenerateRequest(BaseModel):
     query: constr(max_length=2000)
     context_hint: constr(max_length=2000) = ""
     top_k: int = Field(default=3, ge=1, le=20)
+    conversation_id: Optional[str] = Field(default=None, max_length=128)
+
+
+class TaskUpdateRequest(BaseModel):
+    status: Optional[str] = Field(default=None, max_length=32)
+    assignee: Optional[str] = Field(default=None, max_length=128)
+    deadline: Optional[str] = Field(default=None, max_length=64)

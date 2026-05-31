@@ -93,7 +93,7 @@ def create_conversation(request: Request):
     """创建新会话"""
     try:
         conv_id = f"conv_{uuid4().hex}"
-        now = datetime.now().isoformat()
+        now = datetime.utcnow().isoformat()
         with get_db() as conn:
             conn.execute(
                 "INSERT INTO conversations (id, title, created_at) VALUES (?, ?, ?)",
@@ -179,7 +179,7 @@ def add_message(conv_id: str, request: Request, payload: AddMessageRequest):
     try:
         role = payload.role.value
         content = payload.content
-        now = datetime.now().isoformat()
+        now = datetime.utcnow().isoformat()
 
         with get_db() as conn:
             # 检查会话是否存在，不存在则创建
@@ -232,7 +232,7 @@ def replace_messages(conv_id: str, request: Request, payload: ReplaceMessagesReq
     """替换会话的所有消息（用于清空或批量更新）"""
     try:
         messages = payload.messages
-        now = datetime.now().isoformat()
+        now = datetime.utcnow().isoformat()
 
         # Atomic: get_db() commits on normal exit and rolls back on exception.
         # Python's sqlite3 (default isolation_level) groups the DELETE + INSERTs

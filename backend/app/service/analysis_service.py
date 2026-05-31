@@ -25,8 +25,9 @@ class AnalysisService:
                 source_parts.append(f"section={r.get('section')}")
             if r.get("chunk_id"):
                 source_parts.append(f"chunk_id={r.get('chunk_id')}")
+            full_content = r.get("content") or r.get("preview", "")
             lines.append(
-                f"[{i}] source={' | '.join(source_parts)} score={r.get('score'):.4f}\n{r.get('preview','')}"
+                f"[{i}] source={' | '.join(source_parts)} score={r.get('score'):.4f}\n{full_content}"
             )
         return "\n\n".join(lines)
 

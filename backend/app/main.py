@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from starlette.responses import JSONResponse
 import hmac
 import time
@@ -12,14 +13,14 @@ from app.api.document import router as document_router
 from app.api.rag import router as rag_router
 from app.api.task import router as task_router
 from app.api.analysis import router as analysis_router
+from app.middleware.security import SecurityMiddleware
 from app.api.log import router as log_router
 from app.api.conversation import router as conversation_router
 from app.api.diagnostics import router as diagnostics_router
 from app.config.settings import settings
 from app.db.database import init_db
-from app.service.log_service import LogService
+from app.services import get_log_service, get_vector_service
 from app.utils.logger import setup_logging, get_logger
-from app.service.vector_store_factory import create_vector_store
 
 
 setup_logging(settings.log_dir)
@@ -27,9 +28,6 @@ init_db()
 logger = get_logger(__name__)
 
 app = FastAPI(title="RaceAgent API")
-
-# 延迟初始化 LogService，在 FastAPI startup 事件中创建
-log_service: LogService | None = None
 
 
 @app.exception_handler(RequestValidationError)
@@ -57,12 +55,9 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 @app.on_event("startup")
 async def startup_event():
-    global log_service
-    log_service = LogService()
-
     # 启动时确保 FAISS 索引与 chunks 目录一致
     try:
-        vs = create_vector_store()
+        vs = get_vector_service()
         vs.ensure_index()
         logger.info("faiss_index_startup_check_done")
     except Exception as exc:
@@ -96,17 +91,16 @@ async def access_log_middleware(request: Request, call_next):
     )
     if response.status_code >= 400:
         error_text = f"http_{response.status_code}"
-    if log_service is not None:
-        try:
-            log_service.write(
-                request_id=request_id,
-                endpoint=request.url.path,
-                status=str(response.status_code),
-                latency_ms=latency_ms,
-                error=error_text,
-            )
-        except Exception as exc:
-            logger.warning("log_write_failed", extra={"error": str(exc)})
+    try:
+        get_log_service().write(
+            request_id=request_id,
+            endpoint=request.url.path,
+            status=str(response.status_code),
+            latency_ms=latency_ms,
+            error=error_text,
+        )
+    except Exception as exc:
+        logger.warning("log_write_failed", extra={"error": str(exc)})
     return response
 
 
@@ -156,6 +150,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# GZip 压缩 — 对大于 500 字节的响应自动压缩
+app.add_middleware(GZipMiddleware, minimum_size=500)
+
+# 安全中间件：速率限制 + 输入校验 + 安全头
+app.add_middleware(SecurityMiddleware)
 
 
 app.include_router(health_router, tags=["health"])

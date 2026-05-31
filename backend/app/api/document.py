@@ -1,14 +1,16 @@
-from fastapi import APIRouter, File, Request, UploadFile
+import re
+from pathlib import Path
 
+from fastapi import APIRouter, File, Query, Request, UploadFile
+
+from app.config.settings import settings
 from app.db.database import get_db
 from app.model.response import ApiResponse
-from app.service.document_service import DocumentService
-from app.service.vector_store_factory import create_vector_store
+from app.middleware.security import FileUploadGuard
+from app.services import get_document_service, get_vector_service
 from app.utils.logger import get_logger
 
 router = APIRouter()
-document_service = DocumentService()
-vector_service = create_vector_store()
 logger = get_logger(__name__)
 
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
@@ -26,17 +28,18 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
                 request_id=request.state.request_id,
             )
         content = await file.read()
-        if len(content) > MAX_FILE_SIZE:
+        guard_error = FileUploadGuard.validate_upload(file.filename or "unknown", content)
+        if guard_error:
             return ApiResponse(
-                code=413,
-                message="file_too_large",
+                code=400 if guard_error != "file_too_large" else 413,
+                message=guard_error,
                 data={},
                 request_id=request.state.request_id,
             )
-        result = document_service.upload_and_process(file.filename or "unknown", content)
+        result = get_document_service().upload_and_process(file.filename or "unknown", content)
         # 文件上传成功后，触发 FAISS 向量索引重建
         try:
-            index_info = vector_service.rebuild_index()
+            index_info = get_vector_service().rebuild_index()
             result["index_info"] = index_info
             logger.info("index_rebuilt_after_upload", extra={"document_id": result.get("document_id")})
         except Exception as idx_exc:
@@ -58,18 +61,67 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
         )
 
 
+@router.post("/documents/url", response_model=ApiResponse)
+def upload_from_url(request: Request):
+    """从网页链接抓取内容并处理为文档"""
+    try:
+        import json as _json
+        body = _json.loads(request._body.decode("utf-8")) if hasattr(request, "_body") else {}
+    except Exception:
+        body = {}
+    # 从 query 或 body 中获取 url
+    url = request.query_params.get("url") or body.get("url", "")
+    if not url or not url.startswith(("http://", "https://")):
+        return ApiResponse(
+            code=400,
+            message="invalid_url",
+            data={},
+            request_id=request.state.request_id,
+        )
+    try:
+        result = get_document_service().fetch_url_and_process(url)
+        try:
+            get_vector_service().rebuild_index()
+        except Exception:
+            pass
+        return ApiResponse(
+            code=200,
+            message="success",
+            data=result,
+            request_id=request.state.request_id,
+        )
+    except Exception as exc:
+        logger.error("url_fetch_failed", extra={"error": str(exc), "url": url})
+        return ApiResponse(
+            code=500,
+            message=f"抓取失败: {str(exc)[:100]}",
+            data={},
+            request_id=request.state.request_id,
+        )
+
+
 @router.get("/documents/recent", response_model=ApiResponse)
-def recent_documents(request: Request):
+def recent_documents(
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+):
     try:
         with get_db() as conn:
             rows = conn.execute(
                 """
-                SELECT id, file_name, file_type, parse_status, chunk_count, created_at
+                SELECT id, file_name, file_type, parse_status, chunk_count, tags, created_at
                 FROM documents
                 ORDER BY created_at DESC
-                """
+                LIMIT ? OFFSET ?
+                """,
+                (limit, offset),
             ).fetchall()
-            data = [dict(r) for r in rows]
+            data = []
+            for r in rows:
+                d = dict(r)
+                d["tags"] = [t.strip() for t in (d.get("tags") or "").split(",") if t.strip()]
+                data.append(d)
         return ApiResponse(
             code=200,
             message="success",
@@ -86,10 +138,58 @@ def recent_documents(request: Request):
         )
 
 
+@router.get("/documents/{doc_id}", response_model=ApiResponse)
+def get_document_detail(doc_id: str, request: Request):
+    """获取文档详情（含内容摘要和标签）"""
+    if not re.match(r'^[0-9a-fA-F]{32}$', doc_id):
+        return ApiResponse(code=400, message="invalid_doc_id", data={}, request_id=request.state.request_id)
+    try:
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT id, file_name, file_type, parse_status, chunk_count, tags, summary, created_at FROM documents WHERE id = ?",
+                (doc_id,),
+            ).fetchone()
+            if not row:
+                return ApiResponse(code=404, message="not_found", data={}, request_id=request.state.request_id)
+            doc = dict(row)
+            chunks = conn.execute(
+                "SELECT content FROM chunks WHERE document_id = ? ORDER BY chunk_index LIMIT 3",
+                (doc_id,),
+            ).fetchall()
+            doc["preview"] = "\n\n".join(r["content"][:200] for r in chunks)
+            doc["tags"] = [t.strip() for t in (doc.get("tags") or "").split(",") if t.strip()]
+        return ApiResponse(code=200, message="success", data=doc, request_id=request.state.request_id)
+    except Exception as exc:
+        logger.error("get_document_detail_failed", extra={"error": str(exc)})
+        return ApiResponse(code=500, message="internal_error", data={}, request_id=request.state.request_id)
+
+
+@router.put("/documents/{doc_id}/tags", response_model=ApiResponse)
+def update_document_tags(doc_id: str, request: Request):
+    """更新文档标签"""
+    if not re.match(r'^[0-9a-fA-F]{32}$', doc_id):
+        return ApiResponse(code=400, message="invalid_doc_id", data={}, request_id=request.state.request_id)
+    try:
+        import json as _json
+        body = _json.loads(request._body.decode("utf-8")) if hasattr(request, "_body") else {}
+    except Exception:
+        body = {}
+    tags = body.get("tags", [])
+    if isinstance(tags, list):
+        tags_str = ",".join(str(t).strip() for t in tags if t)
+    else:
+        tags_str = str(tags).strip()
+    try:
+        with get_db() as conn:
+            conn.execute("UPDATE documents SET tags = ? WHERE id = ?", (tags_str, doc_id))
+        return ApiResponse(code=200, message="success", data={"tags": tags_str}, request_id=request.state.request_id)
+    except Exception as exc:
+        logger.error("update_tags_failed", extra={"error": str(exc)})
+        return ApiResponse(code=500, message="internal_error", data={}, request_id=request.state.request_id)
+
+
 @router.delete("/documents/{doc_id}", response_model=ApiResponse)
 def delete_document(doc_id: str, request: Request):
-    # 校验 doc_id 格式：只允许 hex 字符串，长度 32
-    import re
     if not re.match(r'^[0-9a-fA-F]{32}$', doc_id):
         return ApiResponse(
             code=400,
@@ -98,10 +198,6 @@ def delete_document(doc_id: str, request: Request):
             request_id=getattr(request.state, "request_id", "-"),
         )
     try:
-        from pathlib import Path
-
-        from app.config.settings import settings
-
         with get_db() as conn:
             # 先查文件信息
             row = conn.execute("SELECT file_path FROM documents WHERE id = ?", (doc_id,)).fetchone()
@@ -142,12 +238,13 @@ def delete_document(doc_id: str, request: Request):
 
         # 重建 FAISS 索引
         try:
-            if vector_service.has_chunks():
-                vector_service.rebuild_index()
+            vs = get_vector_service()
+            if vs.has_chunks():
+                vs.rebuild_index()
             else:
                 # 所有文档已删除，清理索引文件
-                index_path = vector_service.faiss_dir / "index.faiss"
-                meta_path = vector_service.faiss_dir / "metadata.json"
+                index_path = vs.faiss_dir / "index.faiss"
+                meta_path = vs.faiss_dir / "metadata.json"
                 if index_path.exists():
                     index_path.unlink()
                 if meta_path.exists():

@@ -66,6 +66,8 @@ class TaskService:
                     "estimated_hours": hours,
                     "dependency": str(item.get("dependency", "")).strip(),
                     "deliverable": str(item.get("deliverable", "")).strip(),
+                    "assignee": str(item.get("assignee", "")).strip(),
+                    "deadline": str(item.get("suggested_deadline", item.get("deadline", ""))).strip(),
                     "status": "TODO",
                 }
             )
@@ -73,15 +75,17 @@ class TaskService:
             raise ValueError("empty_task_list")
         return normalized
 
-    def _save_tasks(self, tasks: list[dict], refs: list[dict]) -> list[dict]:
+    def _save_tasks(self, tasks: list[dict], refs: list[dict], conversation_id: str | None = None) -> list[dict]:
         saved_tasks: list[dict] = []
         with get_db() as conn:
             for task in tasks:
-                created_at = datetime.utcnow().isoformat()
+                now = datetime.utcnow().isoformat()
                 cursor = conn.execute(
                     """
-                    INSERT INTO tasks(title, description, task_type, priority, difficulty, estimated_hours, dependency, deliverable, status, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO tasks(title, description, task_type, priority, difficulty,
+                        estimated_hours, dependency, deliverable, status, created_at,
+                        conversation_id, assignee, deadline, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', ?)
                     """,
                     (
                         task["title"],
@@ -93,7 +97,9 @@ class TaskService:
                         task["dependency"],
                         task["deliverable"],
                         task["status"],
-                        created_at,
+                        now,
+                        conversation_id or "",
+                        now,
                     ),
                 )
                 task_id = cursor.lastrowid
@@ -111,10 +117,10 @@ class TaskService:
                             ref.get("page_no"),
                             ref.get("section"),
                             ref.get("score"),
-                            created_at,
+                            now,
                         ),
                     )
-                saved_tasks.append({**task, "id": task_id, "created_at": created_at})
+                saved_tasks.append({**task, "id": task_id, "created_at": now})
         return saved_tasks
 
     def _retrieve_context(self, state: TaskWorkflowState) -> None:
@@ -138,7 +144,9 @@ class TaskService:
         self.review_agent.run(state)
 
     def _persist_tasks(self, state: TaskWorkflowState) -> None:
-        state.saved_tasks = self._save_tasks(state.tasks, state.references)
+        state.saved_tasks = self._save_tasks(
+            state.tasks, state.references, conversation_id=state.conversation_id
+        )
         state.mark("persist_tasks")
 
     def _run_workflow(self, state: TaskWorkflowState) -> TaskWorkflowState:
@@ -216,12 +224,13 @@ class TaskService:
         result = graph.compile().invoke({"workflow": state})
         return result["workflow"]
 
-    def generate(self, query: str, context_hint: str, top_k: int, request_id: str) -> dict:
+    def generate(self, query: str, context_hint: str, top_k: int, request_id: str, conversation_id: str = "") -> dict:
         state = TaskWorkflowState(
             query=query,
             context_hint=context_hint,
             top_k=top_k,
             request_id=request_id,
+            conversation_id=conversation_id,
         )
         try:
             state = self._run_workflow(state)
@@ -238,3 +247,51 @@ class TaskService:
                 "review": state.review,
             },
         }
+
+    def list_by_conversation(self, conversation_id: str) -> list[dict]:
+        with get_db() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, conversation_id, title, description, task_type, priority,
+                       difficulty, estimated_hours, dependency, deliverable,
+                       status, assignee, deadline, created_at, updated_at
+                FROM tasks
+                WHERE conversation_id = ?
+                ORDER BY id ASC
+                """,
+                (conversation_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def update_task(self, task_id: int, status: str | None = None,
+                    assignee: str | None = None, deadline: str | None = None) -> dict | None:
+        with get_db() as conn:
+            existing = conn.execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            if not existing:
+                return None
+            updates, params = [], []
+            if status is not None:
+                updates.append("status = ?")
+                params.append(status)
+            if assignee is not None:
+                updates.append("assignee = ?")
+                params.append(assignee)
+            if deadline is not None:
+                updates.append("deadline = ?")
+                params.append(deadline)
+            if not updates:
+                return dict(existing)
+            updates.append("updated_at = ?")
+            params.append(datetime.utcnow().isoformat())
+            params.append(task_id)
+            conn.execute(f"UPDATE tasks SET {', '.join(updates)} WHERE id = ?", params)
+            row = conn.execute(
+                "SELECT * FROM tasks WHERE id = ?", (task_id,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def delete_task(self, task_id: int) -> bool:
+        with get_db() as conn:
+            result = conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+            conn.execute("DELETE FROM task_sources WHERE task_id = ?", (task_id,))
+        return result.rowcount > 0

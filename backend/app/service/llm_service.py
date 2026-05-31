@@ -45,8 +45,11 @@ class LLMService:
                     data = resp.json()
                 except json.JSONDecodeError as exc:
                     raise ValueError(f"invalid_llm_response: {exc}") from exc
+                choices = data.get("choices") or []
+                if not choices:
+                    raise ValueError("invalid_llm_response: empty choices")
                 answer = (
-                    data.get("choices", [{}])[0]
+                    choices[0]
                     .get("message", {})
                     .get("content", "")
                     .strip()
@@ -58,7 +61,7 @@ class LLMService:
                         "status_code": resp.status_code,
                         "latency_ms": latency_ms,
                         "attempt": attempt,
-                        "llm_raw_output": raw[:2000],
+                        "output_length": len(raw),
                     },
                 )
                 return answer or "(empty response)"
@@ -121,12 +124,20 @@ class LLMService:
                             return
                         try:
                             chunk = json.loads(data_str)
-                            delta = chunk.get("choices", [{}])[0].get("delta", {})
+                            choices = chunk.get("choices", [])
+                            if not choices:
+                                continue
+                            delta = choices[0].get("delta", {})
                             token = delta.get("content", "")
                             if token:
                                 yield token
                         except (json.JSONDecodeError, IndexError, KeyError) as exc:
-                            raise ValueError(f"invalid_llm_response: {exc}") from exc
+                            # 跳过解析错误的行，继续处理
+                            self.logger.warning(
+                                "llm_stream_parse_error",
+                                extra={"request_id": request_id, "error": str(exc), "data": data_str[:200]},
+                            )
+                            continue
                     return
             except Exception as exc:
                 last_error = exc

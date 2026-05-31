@@ -1,18 +1,17 @@
 from fastapi import APIRouter, Request
 
+from app.config.settings import settings
 from app.model.response import ApiResponse
-from app.service.llm_service import LLMService
+from app.services import get_llm_service
 from app.utils.logger import get_logger
 
 router = APIRouter()
-llm_service = LLMService()
 logger = get_logger(__name__)
-
 
 @router.get("/diagnostics/llm", response_model=ApiResponse)
 def diagnose_llm(request: Request):
     try:
-        result = llm_service.diagnose(request_id=request.state.request_id)
+        result = get_llm_service().diagnose(request_id=request.state.request_id)
         return ApiResponse(
             code=200 if result.get("ok") else 502,
             message="success" if result.get("ok") else result.get("error_type", "llm_upstream_error"),

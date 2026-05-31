@@ -3,15 +3,25 @@
     --sidebar-bg: #faf9f7;
     --border: #e8e5e0;
     --brand: #d97706;
+    --brand-light: #fbbf24;
     --brand-soft: #f5f0e8;
     --text: #1a1a1a;
     --text-secondary: #666666;
     --text-muted: #999999;
     --user-bubble: #f0f4ff;
+    --success: #10b981;
+    --warning: #f59e0b;
+    --error: #ef4444;
+    --shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
+    --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+    --shadow-lg: 0 8px 24px rgba(0,0,0,0.12);
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 16px;
 }
 
 html, body, [class*="css"] {
-    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
 }
 
 [data-testid="stHeader"] {
@@ -28,8 +38,11 @@ html, body, [class*="css"] {
     overflow-y: auto;
 }
 
+/* ── Sidebar ──────────────────────────────────────────────────────── */
+
 section[data-testid="stSidebar"] {
     background: var(--sidebar-bg) !important;
+    border-right: 1px solid var(--border);
 }
 
 section[data-testid="stSidebar"] > div:first-child {
@@ -55,34 +68,48 @@ section[data-testid="stSidebar"] .stButton > button {
     background: transparent !important;
     color: var(--text-secondary) !important;
     border: 1px solid var(--border) !important;
-    border-radius: 8px !important;
-    transition: all 0.15s ease;
+    border-radius: var(--radius-sm) !important;
+    transition: all 0.2s ease;
+    font-size: 13px !important;
+    padding: 4px 10px !important;
 }
 
 section[data-testid="stSidebar"] .stButton > button:hover {
     background: var(--brand-soft) !important;
     color: var(--brand) !important;
     border-color: var(--brand) !important;
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-sm);
 }
+
+/* ── File Uploader ────────────────────────────────────────────────── */
 
 [data-testid="stFileUploaderDropzone"] {
     background: transparent !important;
-    border: 1px dashed var(--border) !important;
-    border-radius: 8px !important;
+    border: 2px dashed var(--border) !important;
+    border-radius: var(--radius-md) !important;
     min-height: 60px !important;
+    transition: border-color 0.2s ease;
+}
+
+[data-testid="stFileUploaderDropzone"]:hover {
+    border-color: var(--brand) !important;
 }
 
 [data-testid="stFileUploaderDropzone"] button[kind="secondary"] {
     background: transparent !important;
     border: 1px solid var(--border) !important;
     color: var(--text-secondary) !important;
-    border-radius: 8px !important;
+    border-radius: var(--radius-sm) !important;
+    transition: all 0.2s ease;
 }
 
 [data-testid="stFileUploaderDropzone"] button[kind="secondary"]:hover {
     border-color: var(--brand) !important;
     color: var(--brand) !important;
 }
+
+/* ── Chat Messages ────────────────────────────────────────────────── */
 
 div[data-testid="stChatMessage"] {
     max-width: 100% !important;
@@ -117,6 +144,8 @@ div[data-testid="stVerticalBlock"][style*="flex"] > div {
     max-width: none !important;
 }
 
+/* ── User Bubble ──────────────────────────────────────────────────── */
+
 .user-message {
     display: flex;
     justify-content: flex-end;
@@ -132,7 +161,10 @@ div[data-testid="stVerticalBlock"][style*="flex"] > div {
     padding: 12px 18px;
     font-size: 15px;
     line-height: 1.6;
+    box-shadow: var(--shadow-sm);
 }
+
+/* ── Assistant Bubble ─────────────────────────────────────────────── */
 
 .assistant-message {
     display: flex;
@@ -152,13 +184,16 @@ div[data-testid="stVerticalBlock"][style*="flex"] > div {
     text-align: left;
 }
 
+/* ── Thinking Steps ───────────────────────────────────────────────── */
+
 .thinking-steps {
-    background: #f8f9fa;
-    border-radius: 12px;
+    background: linear-gradient(135deg, #f8f9fa 0%, #f0f4ff 100%);
+    border-radius: var(--radius-md);
     padding: 14px 18px;
     margin-bottom: 16px;
     border-left: 3px solid var(--brand);
     max-width: 72%;
+    box-shadow: var(--shadow-sm);
 }
 
 .thinking-step {
@@ -175,6 +210,8 @@ div[data-testid="stVerticalBlock"][style*="flex"] > div {
     font-weight: 700;
 }
 
+/* ── Answer Card ──────────────────────────────────────────────────── */
+
 .answer-card {
     width: 100%;
     max-width: 100%;
@@ -186,18 +223,109 @@ div[data-testid="stVerticalBlock"][style*="flex"] > div {
     color: var(--text);
 }
 
+.answer-card h1, .answer-card h2, .answer-card h3 {
+    margin-top: 1.2em;
+    margin-bottom: 0.6em;
+    font-weight: 600;
+}
+
+.answer-card h2 {
+    font-size: 18px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 6px;
+}
+
+.answer-card code {
+    background: #f1f5f9;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 13px;
+    color: #e11d48;
+}
+
+.answer-card pre {
+    background: #1e293b;
+    color: #e2e8f0;
+    padding: 16px;
+    border-radius: var(--radius-md);
+    overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.5;
+    box-shadow: var(--shadow-md);
+}
+
+.answer-card pre code {
+    background: transparent;
+    color: inherit;
+    padding: 0;
+}
+
+.answer-card ul, .answer-card ol {
+    padding-left: 1.5em;
+    margin: 0.5em 0;
+}
+
+.answer-card li {
+    margin: 0.3em 0;
+}
+
+.answer-card blockquote {
+    border-left: 3px solid var(--brand);
+    padding: 8px 16px;
+    margin: 12px 0;
+    background: var(--brand-soft);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    color: var(--text-secondary);
+}
+
+.answer-card table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 12px 0;
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    box-shadow: var(--shadow-sm);
+}
+
+.answer-card th {
+    background: #f8fafc;
+    font-weight: 600;
+    text-align: left;
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    font-size: 13px;
+}
+
+.answer-card td {
+    padding: 8px 14px;
+    border: 1px solid var(--border);
+    font-size: 14px;
+}
+
+.answer-card tr:nth-child(even) {
+    background: #f8fafc;
+}
+
+/* ── References ───────────────────────────────────────────────────── */
+
 .ref-section {
     margin-top: 16px;
     padding-top: 16px;
-    border-top: 1px solid #f0f0f0;
+    border-top: 1px solid var(--border);
     max-width: 72%;
 }
 
 .ref-item {
     font-size: 12px;
     color: var(--text-muted);
-    padding: 4px 0;
+    padding: 6px 10px;
+    margin: 4px 0;
+    background: #f8f9fa;
+    border-radius: var(--radius-sm);
+    border-left: 2px solid var(--brand);
 }
+
+/* ── Welcome Screen ───────────────────────────────────────────────── */
 
 .welcome-container {
     display: flex;
@@ -209,10 +337,14 @@ div[data-testid="stVerticalBlock"][style*="flex"] > div {
 }
 
 .welcome-greeting {
-    font-size: 26px;
-    font-weight: 600;
+    font-size: 28px;
+    font-weight: 700;
     color: var(--text);
     margin-bottom: 8px;
+    background: linear-gradient(135deg, var(--brand) 0%, var(--brand-light) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
 }
 
 .welcome-desc {
@@ -221,26 +353,122 @@ div[data-testid="stVerticalBlock"][style*="flex"] > div {
     margin-bottom: 36px;
     text-align: center;
     max-width: 500px;
+    line-height: 1.6;
 }
 
+/* ── Chat Input ───────────────────────────────────────────────────── */
+
 .stChatInput {
-    border-radius: 12px !important;
+    border-radius: var(--radius-lg) !important;
     max-width: 100% !important;
     position: sticky;
     bottom: 0;
     background: var(--bg);
     padding: 12px 0;
     z-index: 10;
+    box-shadow: 0 -4px 12px rgba(0,0,0,0.04);
 }
 
 .stChatInput textarea {
-    border-radius: 12px !important;
+    border-radius: var(--radius-lg) !important;
     font-size: 15px !important;
     max-width: 100% !important;
+    border-color: var(--border) !important;
 }
+
+.stChatInput textarea:focus {
+    border-color: var(--brand) !important;
+    box-shadow: 0 0 0 2px rgba(217, 119, 6, 0.15) !important;
+}
+
+/* ── Tabs ─────────────────────────────────────────────────────────── */
+
+.stTabs [data-baseweb="tab-list"] {
+    gap: 0;
+    background: var(--sidebar-bg);
+    border-radius: var(--radius-md);
+    padding: 4px;
+    border: 1px solid var(--border);
+}
+
+.stTabs [data-baseweb="tab"] {
+    border-radius: var(--radius-sm) !important;
+    padding: 8px 16px !important;
+    font-size: 13px !important;
+    font-weight: 500 !important;
+    color: var(--text-secondary) !important;
+    transition: all 0.2s ease;
+}
+
+.stTabs [aria-selected="true"] {
+    background: var(--bg) !important;
+    color: var(--brand) !important;
+    box-shadow: var(--shadow-sm);
+    font-weight: 600 !important;
+}
+
+.stTabs [data-baseweb="tab-border"] {
+    display: none;
+}
+
+.stTabs [data-baseweb="tab-highlight"] {
+    display: none;
+}
+
+/* ── Progress Bar ─────────────────────────────────────────────────── */
+
+.stProgress > div > div {
+    background: linear-gradient(90deg, var(--brand) 0%, var(--brand-light) 100%) !important;
+    border-radius: 4px !important;
+}
+
+.stProgress > div {
+    background: #e5e7eb !important;
+    border-radius: 4px !important;
+    height: 8px !important;
+}
+
+/* ── Selectbox ────────────────────────────────────────────────────── */
+
+div[data-baseweb="select"] > div {
+    border-radius: var(--radius-sm) !important;
+    border-color: var(--border) !important;
+    transition: border-color 0.2s ease;
+}
+
+div[data-baseweb="select"] > div:focus-within {
+    border-color: var(--brand) !important;
+    box-shadow: 0 0 0 2px rgba(217, 119, 6, 0.15) !important;
+}
+
+/* ── Expander ─────────────────────────────────────────────────────── */
+
+details {
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius-md) !important;
+    overflow: hidden;
+}
+
+details summary {
+    font-weight: 500 !important;
+    padding: 10px 14px !important;
+    background: var(--sidebar-bg);
+    transition: background 0.2s ease;
+}
+
+details summary:hover {
+    background: var(--brand-soft) !important;
+}
+
+details[open] summary {
+    border-bottom: 1px solid var(--border);
+}
+
+/* ── Scrollbar ────────────────────────────────────────────────────── */
 
 ::-webkit-scrollbar {
     width: 6px;
+    height: 6px;
 }
 
 ::-webkit-scrollbar-track {
@@ -256,14 +484,34 @@ div[data-testid="stVerticalBlock"][style*="flex"] > div {
     background: #b0b0b0;
 }
 
+/* ── Buttons ──────────────────────────────────────────────────────── */
+
 .stButton > button {
-    border-radius: 8px !important;
+    border-radius: var(--radius-sm) !important;
     font-size: 14px !important;
+    transition: all 0.2s ease;
 }
 
 .stButton > button:hover {
     opacity: 0.85;
+    transform: translateY(-1px);
 }
+
+.stDownloadButton > button {
+    border-radius: var(--radius-sm) !important;
+    font-size: 13px !important;
+    transition: all 0.2s ease;
+}
+
+/* ── Toast Notifications ──────────────────────────────────────────── */
+
+div[data-testid="stToast"] {
+    border-radius: var(--radius-md) !important;
+    box-shadow: var(--shadow-md) !important;
+    font-size: 13px !important;
+}
+
+/* ── Hide Menu & Footer ───────────────────────────────────────────── */
 
 #MainMenu {
     visibility: hidden;
@@ -271,4 +519,120 @@ div[data-testid="stVerticalBlock"][style*="flex"] > div {
 
 footer {
     visibility: hidden;
+}
+
+/* ── Sidebar Brand ────────────────────────────────────────────────── */
+
+.sidebar-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0;
+    margin: 0 0 12px 0;
+}
+
+.sidebar-logo {
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-sm);
+    background: linear-gradient(135deg, var(--brand) 0%, var(--brand-light) 100%);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 12px;
+    box-shadow: var(--shadow-sm);
+}
+
+.sidebar-brand-text h3 {
+    font-size: 16px;
+    font-weight: 700;
+    color: #1a1a1a !important;
+    margin: 0;
+}
+
+.sidebar-brand-text p {
+    font-size: 12px;
+    color: #999 !important;
+    margin: 0;
+}
+
+/* ── Sidebar Section Label ────────────────────────────────────────── */
+
+.sidebar-section-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    margin-bottom: 8px;
+    padding: 0 2px;
+    font-weight: 600;
+}
+
+/* ── File Item ────────────────────────────────────────────────────── */
+
+.file-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    color: var(--text);
+    transition: all 0.2s ease;
+    border: 1px solid transparent;
+}
+
+.file-item:hover {
+    background: var(--brand-soft);
+    border-color: var(--border);
+}
+
+/* ── Stat Cards ───────────────────────────────────────────────────── */
+
+.stat-card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 16px;
+    text-align: center;
+    box-shadow: var(--shadow-sm);
+    transition: all 0.2s ease;
+}
+
+.stat-card:hover {
+    box-shadow: var(--shadow-md);
+    transform: translateY(-2px);
+}
+
+/* ── Animations ───────────────────────────────────────────────────── */
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.fade-in {
+    animation: fadeIn 0.3s ease-out;
+}
+
+/* ── Responsive ───────────────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+    .user-bubble {
+        max-width: 80%;
+    }
+    .assistant-bubble {
+        max-width: 95%;
+    }
+    .thinking-steps {
+        max-width: 95%;
+    }
+    .ref-section {
+        max-width: 95%;
+    }
+    .welcome-greeting {
+        font-size: 22px;
+    }
 }

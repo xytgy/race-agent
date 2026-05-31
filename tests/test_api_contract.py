@@ -3,12 +3,19 @@ import sys
 import tempfile
 from pathlib import Path
 
-from fastapi.testclient import TestClient
-
+import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BACKEND_ROOT = PROJECT_ROOT / "backend"
 sys.path.insert(0, str(BACKEND_ROOT))
+
+try:
+    from fastapi.testclient import TestClient
+    HAS_FASTAPI = True
+except ImportError:
+    HAS_FASTAPI = False
+
+pytestmark = pytest.mark.skipif(not HAS_FASTAPI, reason="requires fastapi")
 
 os.environ.setdefault("LLM_API_KEY", "test-llm-key")
 os.environ.setdefault("LLM_BASE_URL", "http://example.test/v1")
@@ -17,10 +24,12 @@ os.environ.setdefault("EMBEDDING_MODEL", "test-embedding")
 os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="raceagent-test-"))
 os.environ.setdefault("API_KEY", "test-api-key")
 
-from app.main import app  # noqa: E402
-
-
-client = TestClient(app)
+if HAS_FASTAPI:
+    from app.main import app  # noqa: E402
+    client = TestClient(app)
+else:
+    app = None
+    client = None
 
 
 def test_health_uses_uniform_response_contract():

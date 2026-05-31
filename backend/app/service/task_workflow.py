@@ -10,6 +10,7 @@ class TaskWorkflowState:
     context_hint: str
     top_k: int
     request_id: str
+    conversation_id: str = ""
     references: list[dict] = field(default_factory=list)
     embedding_mode: str = ""
     combined_context: str = ""

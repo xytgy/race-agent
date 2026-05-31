@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import math
+import re
 import threading
+from collections import Counter
 from pathlib import Path
 
 import faiss
@@ -12,9 +15,15 @@ from app.service.embedding_service import EmbeddingService
 
 
 class VectorService:
+    """FAISS 向量存储服务。
+
+    管理文档切片的向量索引，支持混合检索（向量 + BM25）、重排序和去重。
+    使用线程安全的缓存机制避免重复加载索引。
+    """
+
     _lock = threading.Lock()
     _cached_index: faiss.Index | None = None
-    _cached_metadata: list[dict] | None = None
+    _cached_metadata: list[dict[str, object]] | None = None
     _cache_valid = False
 
     def __init__(self) -> None:
@@ -25,8 +34,9 @@ class VectorService:
         self.index_path = self.faiss_dir / "index.faiss"
         self.meta_path = self.faiss_dir / "metadata.json"
 
-    def _load_all_chunks(self) -> list[dict]:
-        chunks: list[dict] = []
+    def _load_all_chunks(self) -> list[dict[str, object]]:
+        """加载所有 chunk JSON 文件。"""
+        chunks: list[dict[str, object]] = []
         for p in sorted(self.chunks_dir.glob("*.json")):
             data = json.loads(p.read_text(encoding="utf-8"))
             chunks.extend(data)
@@ -36,7 +46,14 @@ class VectorService:
         """检查是否存在任何 chunk 文件。"""
         return any(self.chunks_dir.glob("*.json"))
 
-    def rebuild_index(self) -> dict:
+    def rebuild_index(self) -> dict[str, object]:
+        """重建 FAISS 索引。
+
+        从所有 chunk 文件重新计算向量并构建索引。
+
+        Returns:
+            包含 status、vectors、dim 的字典
+        """
         with self._lock:
             chunks = self._load_all_chunks()
             if not chunks:
@@ -97,6 +114,69 @@ class VectorService:
             VectorService._cache_valid = True
             return index, metadata
 
+    @staticmethod
+    def _tokenize(text: str) -> list[str]:
+        text = text.lower()
+        cjk = re.findall(r'[\u4e00-\u9fff]', text)
+        words = re.findall(r'[a-z0-9_]+', text)
+        return cjk + words
+
+    def _bm25_search(self, query: str, metadata: list[dict], top_k: int) -> dict[int, float]:
+        """BM25 关键词检索，返回 {chunk_index: score}"""
+        k1, b = 1.5, 0.75
+        query_tokens = self._tokenize(query)
+        if not query_tokens:
+            return {}
+
+        doc_count = len(metadata)
+        avg_dl = sum(len(self._tokenize(c.get("content", ""))) for c in metadata) / max(doc_count, 1)
+
+        df: Counter = Counter()
+        doc_tokens_cache: list[list[str]] = []
+        for chunk in metadata:
+            tokens = self._tokenize(chunk.get("content", ""))
+            doc_tokens_cache.append(tokens)
+            unique = set(tokens)
+            for t in unique:
+                df[t] += 1
+
+        scores: dict[int, float] = {}
+        for idx, tokens in enumerate(doc_tokens_cache):
+            if not tokens:
+                continue
+            tf = Counter(tokens)
+            dl = len(tokens)
+            score = 0.0
+            for qt in query_tokens:
+                if qt not in tf:
+                    continue
+                n = df.get(qt, 0)
+                idf = math.log((doc_count - n + 0.5) / (n + 0.5) + 1)
+                tf_val = (tf[qt] * (k1 + 1)) / (tf[qt] + k1 * (1 - b + b * dl / max(avg_dl, 1)))
+                score += idf * tf_val
+            if score > 0:
+                scores[idx] = score
+
+        top = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_k * 2]
+        if top:
+            max_score = top[0][1]
+            return {idx: s / max_score for idx, s in top}
+        return {}
+
+    def _rerank(self, query: str, results: list[dict]) -> list[dict]:
+        """基于关键词重叠的轻量重排序"""
+        query_tokens = set(self._tokenize(query))
+        if not query_tokens:
+            return results
+
+        for r in results:
+            doc_tokens = set(self._tokenize(r.get("content", "")))
+            overlap = len(query_tokens & doc_tokens) / len(query_tokens) if query_tokens else 0
+            r["rerank_boost"] = overlap
+
+        results.sort(key=lambda x: x.get("score", 0) + x.get("rerank_boost", 0) * 0.3, reverse=True)
+        return results
+
     def search(
         self,
         question: str,
@@ -105,20 +185,38 @@ class VectorService:
     ) -> tuple[list[dict], str]:
         self.ensure_index()
 
-        query = self.embedding_service.embed_text(question).astype(np.float32).reshape(1, -1)
         index, metadata = self._get_index_and_metadata()
+
+        # 向量检索
+        query = self.embedding_service.embed_text(question).astype(np.float32).reshape(1, -1)
         if query.shape[1] != index.d:
             self.rebuild_index()
             index, metadata = self._get_index_and_metadata()
             query = self.embedding_service.embed_text(question).astype(np.float32).reshape(1, -1)
-        scores, ids = index.search(query, top_k)
+        vec_scores, vec_ids = index.search(query, top_k * 2)
 
-        results: list[dict] = []
-        for score, idx in zip(scores[0], ids[0]):
+        # BM25 关键词检索
+        bm25_scores = self._bm25_search(question, metadata, top_k)
+
+        # 合并向量和 BM25 结果（RRF 融合）
+        candidate_indices: dict[int, float] = {}
+        vec_weight, bm25_weight = 0.6, 0.4
+
+        for rank, (score, idx) in enumerate(zip(vec_scores[0], vec_ids[0])):
             if idx < 0 or idx >= len(metadata):
                 continue
-            score_value = float(score)
-            if score_threshold is not None and score_value < score_threshold:
+            rrf_score = 1.0 / (rank + 60)
+            candidate_indices[int(idx)] = candidate_indices.get(int(idx), 0) + rrf_score * vec_weight
+
+        for idx, score in bm25_scores.items():
+            rrf_score = score / 60
+            candidate_indices[idx] = candidate_indices.get(idx, 0) + rrf_score * bm25_weight
+
+        sorted_candidates = sorted(candidate_indices.items(), key=lambda x: x[1], reverse=True)[:top_k * 2]
+
+        results: list[dict] = []
+        for idx, fused_score in sorted_candidates:
+            if score_threshold is not None and fused_score < score_threshold:
                 continue
             item = metadata[idx]
             full_content = item.get("content", "")
@@ -134,9 +232,37 @@ class VectorService:
                     "section": item.get("section"),
                     "char_start": item.get("char_start"),
                     "char_end": item.get("char_end"),
-                    "score": score_value,
+                    "score": fused_score,
                     "content": full_content,
                     "preview": full_content[:200],
                 }
             )
-        return results, self.embedding_service.mode
+
+        # 重排序
+        results = self._rerank(question, results)
+
+        # 去重重叠切片
+        results = self._dedup_chunks(results)
+
+        return results[:top_k], self.embedding_service.mode
+
+    @staticmethod
+    def _dedup_chunks(results: list[dict]) -> list[dict]:
+        """去除内容高度重叠的切片"""
+        if len(results) <= 1:
+            return results
+        deduped: list[dict] = []
+        seen_content: list[str] = []
+        for r in results:
+            content = r.get("content", "")
+            is_dup = False
+            for seen in seen_content:
+                if len(content) > 0 and len(seen) > 0:
+                    shorter, longer = (content, seen) if len(content) <= len(seen) else (seen, content)
+                    if shorter and shorter in longer:
+                        is_dup = True
+                        break
+            if not is_dup:
+                deduped.append(r)
+                seen_content.append(content)
+        return deduped

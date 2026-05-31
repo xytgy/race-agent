@@ -5,12 +5,11 @@ from fastapi.responses import StreamingResponse
 
 from app.model.request import RagQueryRequest
 from app.model.response import ApiResponse
-from app.service.rag_service import RAGService
+from app.services import get_rag_service
 from app.utils.errors import classify_llm_error, map_llm_error
 from app.utils.logger import get_logger
 
 router = APIRouter()
-rag_service = RAGService()
 logger = get_logger(__name__)
 
 
@@ -30,11 +29,12 @@ def rag_query(payload: RagQueryRequest, request: Request):
 
         # 流式输出模式：返回 SSE (Server-Sent Events)
         if payload.stream:
-            token_gen, references, embedding_mode = rag_service.query_stream(
+            token_gen, references, embedding_mode = get_rag_service().query_stream(
                 question,
                 top_k=payload.top_k,
                 request_id=request.state.request_id,
                 score_threshold=payload.score_threshold,
+                model=payload.model,
             )
 
             def event_generator():
@@ -66,7 +66,7 @@ def rag_query(payload: RagQueryRequest, request: Request):
             )
 
         # 普通模式：一次性返回完整结果
-        result = rag_service.query(
+        result = get_rag_service().query(
             question,
             top_k=payload.top_k,
             request_id=request.state.request_id,
@@ -96,7 +96,7 @@ def rag_query(payload: RagQueryRequest, request: Request):
 @router.post("/rag/debug", response_model=ApiResponse)
 def rag_debug(payload: RagQueryRequest, request: Request):
     try:
-        references, embedding_mode = rag_service.retrieve(
+        references, embedding_mode = get_rag_service().retrieve(
             payload.question,
             top_k=payload.top_k,
             score_threshold=payload.score_threshold,

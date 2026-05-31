@@ -103,3 +103,17 @@ def init_db() -> None:
             );
             """
         )
+        _migrate_tasks_table(conn)
+
+
+def _migrate_tasks_table(conn: sqlite3.Connection) -> None:
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
+    migrations = [
+        ("conversation_id", "TEXT"),
+        ("assignee", "TEXT DEFAULT ''"),
+        ("deadline", "TEXT DEFAULT ''"),
+        ("updated_at", "TEXT DEFAULT ''"),
+    ]
+    for col, definition in migrations:
+        if col not in existing:
+            conn.execute(f"ALTER TABLE tasks ADD COLUMN {col} {definition}")

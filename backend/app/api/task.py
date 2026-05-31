@@ -1,8 +1,7 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 
-from app.model.request import TaskGenerateRequest
+from app.model.request import TaskGenerateRequest, TaskUpdateRequest
 from app.model.response import ApiResponse
-from app.db.database import get_db
 from app.service.task_service import TaskService
 from app.utils.errors import map_llm_error
 from app.utils.logger import get_logger
@@ -20,6 +19,7 @@ def generate_tasks(payload: TaskGenerateRequest, request: Request):
             context_hint=payload.context_hint,
             top_k=payload.top_k,
             request_id=request.state.request_id,
+            conversation_id=payload.conversation_id or "",
         )
         return ApiResponse(
             code=200,
@@ -52,29 +52,15 @@ def generate_tasks(payload: TaskGenerateRequest, request: Request):
 
 
 @router.get("/tasks", response_model=ApiResponse)
-def list_tasks(request: Request):
+def list_tasks(
+    request: Request,
+    conversation_id: str | None = Query(default=None),
+):
     try:
-        with get_db() as conn:
-            rows = conn.execute(
-                """
-                SELECT
-                  t.id,
-                  t.title,
-                  t.task_type,
-                  t.priority,
-                  t.difficulty,
-                  t.estimated_hours,
-                  t.status,
-                  t.created_at,
-                  COUNT(ts.id) AS source_count
-                FROM tasks t
-                LEFT JOIN task_sources ts ON ts.task_id = t.id
-                GROUP BY t.id
-                ORDER BY t.id DESC
-                LIMIT 20
-                """
-            ).fetchall()
-            items = [dict(r) for r in rows]
+        if conversation_id:
+            items = task_service.list_by_conversation(conversation_id)
+        else:
+            items = []
         return ApiResponse(
             code=200,
             message="success",
@@ -91,43 +77,34 @@ def list_tasks(request: Request):
         )
 
 
-@router.get("/tasks/{task_id}", response_model=ApiResponse)
-def get_task(task_id: int, request: Request):
+@router.put("/tasks/{task_id}", response_model=ApiResponse)
+def update_task(
+    task_id: int,
+    payload: TaskUpdateRequest,
+    request: Request,
+):
     try:
-        with get_db() as conn:
-            task = conn.execute(
-                """
-                SELECT id, title, description, task_type, priority, difficulty,
-                       estimated_hours, dependency, deliverable, status, created_at
-                FROM tasks
-                WHERE id = ?
-                """,
-                (task_id,),
-            ).fetchone()
-            if not task:
-                return ApiResponse(
-                    code=404,
-                    message="task_not_found",
-                    data={},
-                    request_id=request.state.request_id,
-                )
-            sources = conn.execute(
-                """
-                SELECT document_id, chunk_id, source_file, page_no, section, score
-                FROM task_sources
-                WHERE task_id = ?
-                ORDER BY id ASC
-                """,
-                (task_id,),
-            ).fetchall()
+        updated = task_service.update_task(
+            task_id=task_id,
+            status=payload.status,
+            assignee=payload.assignee,
+            deadline=payload.deadline,
+        )
+        if updated is None:
+            return ApiResponse(
+                code=404,
+                message="task_not_found",
+                data={},
+                request_id=request.state.request_id,
+            )
         return ApiResponse(
             code=200,
             message="success",
-            data={"task": dict(task), "sources": [dict(row) for row in sources]},
+            data=updated,
             request_id=request.state.request_id,
         )
     except Exception as exc:
-        logger.error("task_get_failed", extra={"error": str(exc)})
+        logger.error("task_update_failed", extra={"error": str(exc)})
         return ApiResponse(
             code=500,
             message="internal_error",
@@ -136,34 +113,25 @@ def get_task(task_id: int, request: Request):
         )
 
 
-@router.put("/tasks/{task_id}/status", response_model=ApiResponse)
-def update_task_status(task_id: int, request: Request, status: str = "DONE"):
+@router.delete("/tasks/{task_id}", response_model=ApiResponse)
+def delete_task(task_id: int, request: Request):
     try:
-        valid_statuses = ["TODO", "IN_PROGRESS", "BLOCKED", "DONE", "CANCELLED"]
-        if status not in valid_statuses:
+        deleted = task_service.delete_task(task_id)
+        if not deleted:
             return ApiResponse(
-                code=400,
-                message="invalid_status",
+                code=404,
+                message="task_not_found",
                 data={},
                 request_id=request.state.request_id,
             )
-        with get_db() as conn:
-            result = conn.execute("UPDATE tasks SET status = ? WHERE id = ?", (status, task_id))
-            if result.rowcount == 0:
-                return ApiResponse(
-                    code=404,
-                    message="task_not_found",
-                    data={},
-                    request_id=request.state.request_id,
-                )
         return ApiResponse(
             code=200,
             message="success",
-            data={"task_id": task_id, "status": status},
+            data={"task_id": task_id},
             request_id=request.state.request_id,
         )
     except Exception as exc:
-        logger.error("task_update_failed", extra={"error": str(exc)})
+        logger.error("task_delete_failed", extra={"error": str(exc)})
         return ApiResponse(
             code=500,
             message="internal_error",

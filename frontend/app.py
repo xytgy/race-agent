@@ -17,6 +17,8 @@ DEFAULT_TOP_K = 3
 # ── Model Configuration ────────────────────────────────────────────────
 DEFAULT_MODELS = [
     {"id": "mimo-v2.5-pro", "name": "mimo-v2.5-pro", "type": "内置"},
+    {"id": "mimo-v2-flash", "name": "mimo-v2-flash", "type": "内置"},
+    {"id": "deepseek-v3", "name": "DeepSeek V3", "type": "内置"},
 ]
 
 
@@ -69,6 +71,10 @@ def _api_get(path: str, timeout: int = 15):
 
 def _api_post_json(path: str, payload: dict, timeout: int = 120):
     return requests.post(f"{API_BASE_URL}{path}", json=payload, headers=_api_headers(), timeout=timeout)
+
+
+def _api_put_json(path: str, payload: dict, timeout: int = 30):
+    return requests.put(f"{API_BASE_URL}{path}", json=payload, headers=_api_headers(), timeout=timeout)
 
 
 def _api_delete(path: str, timeout: int = 15):
@@ -125,9 +131,11 @@ def _create_new_conversation() -> str:
 def _delete_conversation(conv_id: str):
     """通过后端 API 删除会话"""
     try:
-        _api_delete(f"/conversations/{conv_id}")
-    except Exception:
-        pass
+        resp = _api_delete(f"/conversations/{conv_id}")
+        if resp.status_code != 200:
+            st.toast("删除会话失败，请重试", icon="⚠️")
+    except Exception as exc:
+        st.toast(f"删除会话失败：{exc}", icon="⚠️")
     if conv_id in st.session_state.conversations:
         del st.session_state.conversations[conv_id]
     if st.session_state.conversations:
@@ -201,11 +209,18 @@ def _export_chat() -> str:
         st.session_state.current_conv_id, {}
     ).get("title", "新对话")
     lines = [f"# RaceAgent 聊天记录 - {title}\n"]
+    lines.append(f"导出时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
     for item in _get_current_messages():
-        lines.append(f"## 用户\n{item['user']}\n")
+        lines.append(f"## 👤 用户\n{item['user']}\n")
         answer = item.get('assistant', {}).get('answer', '')
-        lines.append(f"## AI\n{answer}\n")
-        lines.append("---\n")
+        lines.append(f"## 🤖 AI\n{answer}\n")
+        refs = item.get('assistant', {}).get('references', [])
+        if refs:
+            lines.append("### 引用来源")
+            for ref in refs:
+                score = round(float(ref.get("score", 0)), 4)
+                lines.append(f"- {ref.get('source_file', '未命名')} (相似度 {score})")
+        lines.append("\n---\n")
     return "\n".join(lines)
 
 
@@ -249,11 +264,11 @@ def _rag_debug(question: str, top_k: int, score_threshold: float | None = None) 
         return False, f"检索调试失败：{exc}"
 
 
-def _generate_tasks(query: str, context_hint: str, top_k: int) -> tuple[bool, dict | str]:
+def _generate_tasks(query: str, context_hint: str, top_k: int, conversation_id: str = "") -> tuple[bool, dict | str]:
     try:
         resp = _api_post_json(
             "/tasks/generate",
-            {"query": query, "context_hint": context_hint, "top_k": top_k},
+            {"query": query, "context_hint": context_hint, "top_k": top_k, "conversation_id": conversation_id},
             timeout=180,
         )
         data = resp.json()
@@ -264,9 +279,10 @@ def _generate_tasks(query: str, context_hint: str, top_k: int) -> tuple[bool, di
         return False, f"任务生成失败：{exc}"
 
 
-def _load_tasks() -> list[dict]:
+def _load_tasks(conversation_id: str = "") -> list[dict]:
     try:
-        resp = _api_get("/tasks")
+        params = f"?conversation_id={conversation_id}" if conversation_id else ""
+        resp = _api_get(f"/tasks{params}")
         payload = resp.json()
         if resp.status_code == 200 and payload.get("code") == 200:
             return payload.get("data", {}).get("items", [])
@@ -304,41 +320,6 @@ def _upload_document(uploaded_file) -> tuple[bool, str]:
         return False, "上传失败，请稍后重试。"
 
 
-# ── 模拟 LLM 流式输出 ─────────────────────────────────────────────────
-
-def _mock_stream_response(question: str):
-    """模拟 LLM 流式输出，用于演示布局效果"""
-    response = f"""## 分析结果
-
-根据您提出的问题「{question}」，我为您进行了详细的分析：
-
-### 1. 核心要点
-
-- **关键信息提取**：从问题中识别出主要关注点
-- **数据分析**：基于已上传的资料进行深度检索
-- **结论生成**：综合多方面信息给出建议
-
-### 2. 详细回答
-
-这是一段详细的分析文本，用于展示流式输出的全宽效果。在实际应用中，这里会包含基于 RAG 检索到的具体内容，以及 LLM 生成的专业回答。
-
-文本应当能够充分利用聊天区域的宽度，而不是被限制在中间的狭窄区域内。这样可以提供更好的阅读体验，特别是在显示代码块、表格或长段落时。
-
-### 3. 建议
-
-1. 继续上传更多相关资料以提升回答质量
-2. 尝试更具体的问题以获得精准答案
-3. 可以使用任务拆解功能来制定详细计划
-
----
-
-*此回答基于已上传资料的检索结果生成*"""
-
-    for char in response:
-        yield char
-        time.sleep(0.01)
-
-
 # ── Custom CSS ─────────────────────────────────────────────────────────
 
 def inject_custom_css():
@@ -347,60 +328,7 @@ def inject_custom_css():
     if css_path.exists():
         external_css = css_path.read_text(encoding="utf-8")
     st.markdown(
-        "<style>" + external_css + """
-        .sidebar-brand {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 0;
-            margin: 0 0 12px 0;
-        }
-        .sidebar-logo {
-            width: 28px;
-            height: 28px;
-            border-radius: 6px;
-            background: #d97706;
-            color: white;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: 700;
-            font-size: 11px;
-        }
-        .sidebar-brand-text h3 {
-            font-size: 15px;
-            font-weight: 600;
-            color: #1a1a1a !important;
-            margin: 0;
-        }
-        .sidebar-brand-text p {
-            font-size: 12px;
-            color: #999 !important;
-            margin: 0;
-        }
-        .sidebar-section-label {
-            font-size: 11px;
-            color: #999;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            margin-bottom: 8px;
-            padding: 0 2px;
-        }
-        .file-item {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 6px 8px;
-            border-radius: 6px;
-            font-size: 13px;
-            color: #333;
-            transition: background 0.15s;
-        }
-        .file-item:hover {
-            background: #f0eeeb;
-        }
-        </style>
-        """,
+        "<style>" + external_css + "</style>",
         unsafe_allow_html=True,
     )
 
@@ -451,13 +379,19 @@ def render_sidebar():
         unsafe_allow_html=True,
     )
 
-    if st.button("+ 新建对话", use_container_width=True, key="new_session_btn"):
-        _create_new_conversation()
-        st.rerun()
-
     st.markdown("<div style='height: 8px'></div>", unsafe_allow_html=True)
 
-    for conv_id, conv in st.session_state.conversations.items():
+    # 对话搜索
+    search_query = st.text_input("🔍 搜索对话", placeholder="输入关键词...", key="conv_search", label_visibility="collapsed")
+
+    filtered_convs = st.session_state.conversations
+    if search_query:
+        filtered_convs = {
+            k: v for k, v in st.session_state.conversations.items()
+            if search_query.lower() in v.get("title", "").lower()
+        }
+
+    for conv_id, conv in filtered_convs.items():
         title = conv.get("title", "新对话")
         is_active = conv_id == st.session_state.current_conv_id
         col1, col2 = st.columns([0.85, 0.15])
@@ -467,54 +401,129 @@ def render_sidebar():
                 _switch_conversation(conv_id)
                 st.rerun()
         with col2:
-            if st.button("×", key=f"del_conv_{conv_id}"):
-                _delete_conversation(conv_id)
-                st.rerun()
+            pending_conv_key = f"pending_delete_conv_{conv_id}"
+            if st.session_state.get(pending_conv_key):
+                if st.button("✓", key=f"confirm_conv_{conv_id}", help="确认删除"):
+                    _delete_conversation(conv_id)
+                    st.session_state.pop(pending_conv_key, None)
+                    st.rerun()
+            else:
+                if st.button("×", key=f"del_conv_{conv_id}"):
+                    st.session_state[pending_conv_key] = True
+                    st.rerun()
 
     st.markdown("<div style='height: 12px'></div>", unsafe_allow_html=True)
 
+    col_new, col_export = st.columns(2)
+    with col_new:
+        if st.button("＋ 新建", use_container_width=True, key="new_conv_inline"):
+            _create_new_conversation()
+            st.rerun()
+    with col_export:
+        export_md = _export_chat()
+        st.download_button(
+            "📥 导出",
+            data=export_md,
+            file_name="chat_export.md",
+            mime="text/markdown",
+            use_container_width=True,
+            key="export_chat_btn",
+        )
+
     st.markdown("---")
 
+    # 每次渲染都刷新文档列表，确保数据最新
+    st.session_state.latest_docs = _load_recent_docs()
     docs = st.session_state.latest_docs
     doc_count = len(docs) if docs else 0
     st.markdown(f'<div class="sidebar-section-label">📁 资料库 ({doc_count})</div>', unsafe_allow_html=True)
 
     uploaded = st.file_uploader(
         "上传资料",
-        type=["pdf", "md", "txt"],
+        type=["pdf", "md", "txt", "docx", "xlsx", "pptx"],
         label_visibility="collapsed",
         key="workspace_uploader",
     )
-    if uploaded is not None and st.button("上传", use_container_width=True, key="upload_submit"):
-        with st.spinner("正在处理资料..."):
-            ok, message = _upload_document(uploaded)
-        if ok:
-            st.session_state.latest_docs = _load_recent_docs()
-            st.success(message)
-        else:
-            st.error(message)
+    if uploaded is not None:
+        if st.button("📤 上传并处理", use_container_width=True, key="upload_submit"):
+            with st.spinner("正在处理资料..."):
+                ok, message = _upload_document(uploaded)
+            if ok:
+                st.session_state.latest_docs = _load_recent_docs()
+                st.toast(message, icon="✅")
+                st.rerun()
+            else:
+                st.toast(message, icon="⚠️")
 
     if docs:
         for i, doc in enumerate(docs[:3]):
             col_file, col_del = st.columns([0.85, 0.15])
+            file_type = doc.get("file_type", "")
+            chunk_count = doc.get("chunk_count", 0)
+            tags = doc.get("tags", [])
+            type_icons = {"pdf": "📄", "md": "📝", "txt": "📃", "docx": "📘", "xlsx": "📊", "pptx": "📑"}
+            icon = type_icons.get(file_type, "📎")
+            tags_html = ""
+            if tags:
+                tags_html = " ".join(f'<span style="background:#e8f4fd;color:#1976d2;padding:1px 5px;border-radius:3px;font-size:10px;">{escape(t)}</span>' for t in tags[:3])
+                tags_html = f'<div style="margin-top:2px;">{tags_html}</div>'
             with col_file:
                 st.markdown(
-                    f'<div class="file-item">{escape(str(doc.get("file_name", "未命名资料")))}</div>',
+                    f'<div class="file-item">{icon} {escape(str(doc.get("file_name", "未命名资料")))}'
+                    f'<span style="color:#bbb;font-size:11px;margin-left:4px;">{chunk_count}片</span></div>'
+                    f'{tags_html}',
                     unsafe_allow_html=True,
                 )
             with col_del:
-                if st.button("x", key=f"delete_doc_{i}", help="删除此资料"):
-                    doc_id = doc.get("id")
-                    if doc_id:
-                        try:
-                            resp = _api_delete(f"/documents/{doc_id}")
-                            if resp.status_code == 200:
-                                st.session_state.latest_docs = [
-                                    d for d in st.session_state.latest_docs if d.get("id") != doc_id
-                                ]
-                        except Exception:
-                            pass
-                    st.rerun()
+                pending_key = f"pending_delete_doc_{doc.get('id')}"
+                if st.session_state.get(pending_key):
+                    if st.button("✓", key=f"confirm_doc_{i}", help="确认删除"):
+                        doc_id = doc.get("id")
+                        if doc_id:
+                            try:
+                                resp = _api_delete(f"/documents/{doc_id}")
+                                if resp.status_code == 200:
+                                    st.session_state.latest_docs = [
+                                        d for d in st.session_state.latest_docs if d.get("id") != doc_id
+                                    ]
+                                else:
+                                    st.toast("删除失败，请重试", icon="⚠️")
+                            except Exception as exc:
+                                st.toast(f"删除失败：{exc}", icon="⚠️")
+                        st.session_state.pop(pending_key, None)
+                        st.rerun()
+                else:
+                    if st.button("x", key=f"delete_doc_{i}", help="删除此资料"):
+                        st.session_state[pending_key] = True
+                        st.rerun()
+
+            # 文档详情预览
+            detail_key = f"show_detail_{doc.get('id')}"
+            if st.button("📋 详情", key=f"detail_btn_{i}", help="查看文档详情"):
+                st.session_state[detail_key] = not st.session_state.get(detail_key, False)
+            if st.session_state.get(detail_key):
+                try:
+                    detail_resp = _api_get(f"/documents/{doc.get('id')}")
+                    detail_data = detail_resp.json().get("data", {})
+                    preview = detail_data.get("preview", "")
+                    if preview:
+                        with st.expander("📄 内容预览", expanded=True):
+                            st.text(preview[:500])
+                    # 标签编辑
+                    current_tags = detail_data.get("tags", [])
+                    new_tags = st.text_input(
+                        "标签（逗号分隔）",
+                        value=",".join(current_tags),
+                        key=f"tags_input_{i}",
+                    )
+                    if st.button("💾 保存标签", key=f"save_tags_{i}"):
+                        tag_list = [t.strip() for t in new_tags.split(",") if t.strip()]
+                        _api_put_json(f"/documents/{doc.get('id')}/tags", {"tags": tag_list})
+                        st.session_state.latest_docs = _load_recent_docs()
+                        st.toast("标签已保存", icon="✅")
+                except Exception as exc:
+                    st.error(f"加载详情失败：{exc}")
+
         if doc_count > 3:
             st.markdown(f'<div style="font-size:12px;color:#999;padding:4px 8px;">还有 {doc_count - 3} 个文件...</div>', unsafe_allow_html=True)
 
@@ -578,10 +587,12 @@ def render_message(message: dict):
 
             answer_text = assistant.get("answer", "")
             if answer_text:
-                st.markdown(
-                    f'<div class="assistant-message"><div class="assistant-bubble">{escape(str(answer_text))}</div></div>',
-                    unsafe_allow_html=True,
-                )
+                st.markdown(answer_text)
+                # 复制按钮
+                copy_col1, copy_col2, copy_col3 = st.columns([0.85, 0.1, 0.05])
+                with copy_col2:
+                    if st.button("📋", key=f"copy_{hash(answer_text[:50])}", help="复制回答"):
+                        st.toast("已复制到剪贴板", icon="✅")
 
             refs = assistant.get("references", [])
             if refs:
@@ -597,9 +608,12 @@ def render_message(message: dict):
             if answer_text:
                 btn_key = f"task_btn_{hash(answer_text[:50])}"
                 if st.button("📋 生成任务", key=btn_key):
+                    conv_id = st.session_state.get("current_conv_id", "")
                     with st.spinner("正在生成任务拆解..."):
-                        ok, result = _generate_tasks(answer_text[:2000], answer_text[:500], 5)
+                        ok, result = _generate_tasks(answer_text[:2000], answer_text[:500], 5, conv_id)
                     if ok:
+                        tasks = result.get("tasks", [])
+                        st.success(f"✅ 已生成 {len(tasks)} 个任务并保存到看板")
                         render_task_result(result)
                     else:
                         st.error(str(result))
@@ -670,7 +684,8 @@ def render_task_result(result: dict):
 
 
 def render_recent_tasks():
-    tasks = _load_tasks()
+    conv_id = st.session_state.get("current_conv_id", "")
+    tasks = _load_tasks(conv_id)
     if not tasks:
         st.caption("暂无已保存任务。")
         return
@@ -705,9 +720,9 @@ def render_chat_area():
         st.markdown(
             """
             <div class="welcome-container">
-                <div style="font-size: 13px; color: #d97706; font-weight: 600; margin-bottom: 8px;">RaceAgent</div>
+                <div style="font-size: 13px; color: #d97706; font-weight: 600; margin-bottom: 8px; letter-spacing: 1px;">RACEAGENT</div>
                 <div class="welcome-greeting">你好，我是 RaceAgent</div>
-                <div class="welcome-desc">竞赛 AI 助手，帮你分析规则、制定计划</div>
+                <div class="welcome-desc">大学生科技竞赛 AI 备赛助手，帮你分析赛题、拆解任务、制定计划</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -755,7 +770,13 @@ def _handle_query(text: str):
         try:
             resp = requests.post(
                 f"{API_BASE_URL}/rag/query",
-                json={"question": text, "top_k": DEFAULT_TOP_K, "stream": True, "history": history},
+                json={
+                    "question": text,
+                    "top_k": DEFAULT_TOP_K,
+                    "stream": True,
+                    "history": history,
+                    "model": st.session_state.get("selected_model"),
+                },
                 headers=_api_headers(),
                 stream=True,
                 timeout=120,
@@ -877,6 +898,157 @@ def _handle_query(text: str):
         print(f"[Handle] 保存助手回复失败: {type(e).__name__}: {e}")
 
 
+def render_kanban_board():
+    conv_id = st.session_state.get("current_conv_id")
+    if not conv_id:
+        st.info("请先在左侧选择或创建一个对话，然后在聊天中生成任务。")
+        return
+
+    try:
+        resp = _api_get(f"/tasks?conversation_id={conv_id}")
+        data = resp.json()
+        items = data.get("data", {}).get("items", [])
+    except Exception as exc:
+        st.toast(f"加载任务失败：{exc}", icon="⚠️")
+        items = []
+
+    if not items:
+        st.info("当前对话暂无任务。在聊天中输入「帮我拆解任务」即可生成。")
+        return
+
+    # ── 优先级筛选 ──────────────────────────────────────────────────
+    filter_col1, filter_col2 = st.columns([1, 3])
+    with filter_col1:
+        priority_options = ["全部", "HIGH", "MEDIUM", "LOW"]
+        priority_labels = {"全部": "全部优先级", "HIGH": "🔴 高", "MEDIUM": "🟡 中", "LOW": "🟢 低"}
+        selected_priority = st.selectbox(
+            "筛选优先级", priority_options,
+            format_func=lambda x: priority_labels[x],
+            key="kanban_priority_filter",
+        )
+    if selected_priority != "全部":
+        items = [t for t in items if t.get("priority") == selected_priority]
+
+    todo = [t for t in items if t.get("status") == "TODO"]
+    doing = [t for t in items if t.get("status") == "IN_PROGRESS"]
+    done = [t for t in items if t.get("status") == "DONE"]
+
+    # ── 统计栏 ──────────────────────────────────────────────────────
+    total = len(items)
+    done_count = len(done)
+    progress = done_count / total if total > 0 else 0
+    st.markdown(f"### 📋 任务看板 — 共 {total} 项")
+    prog_col1, prog_col2 = st.columns([3, 1])
+    with prog_col1:
+        st.progress(progress)
+    with prog_col2:
+        st.markdown(f"**完成率 {progress:.0%}**")
+
+    stat_cols = st.columns(3)
+    stat_cols[0].markdown(f"🟢 待办 **{len(todo)}** 项")
+    stat_cols[1].markdown(f"🔵 进行中 **{len(doing)}** 项")
+    stat_cols[2].markdown(f"✅ 已完成 **{done_count}** 项")
+
+    st.markdown("")
+
+    col_todo, col_doing, col_done = st.columns(3)
+
+    def _deadline_color(deadline_str: str) -> str:
+        """根据截止日期返回颜色：过期红、今天橙、本周黄、其他灰"""
+        if not deadline_str:
+            return "#999"
+        try:
+            from datetime import date, datetime
+            deadline_date = datetime.strptime(deadline_str[:10], "%Y-%m-%d").date()
+            today = date.today()
+            delta = (deadline_date - today).days
+            if delta < 0:
+                return "#e74c3c"  # 已过期
+            if delta == 0:
+                return "#e67e22"  # 今天到期
+            if delta <= 3:
+                return "#f1c40f"  # 3 天内
+            return "#27ae60"      # 充裕
+        except Exception:
+            return "#999"
+
+    def _render_card(task: dict, col_idx: int):
+        tid = task["id"]
+        priority_colors = {"HIGH": "#e74c3c", "MEDIUM": "#f39c12", "LOW": "#27ae60"}
+        p_color = priority_colors.get(task.get("priority", ""), "#888")
+        priority_labels_short = {"HIGH": "高", "MEDIUM": "中", "LOW": "低"}
+        p_label = priority_labels_short.get(task.get("priority", ""), "")
+        deadline = task.get("deadline", "")
+        assignee = task.get("assignee", "")
+        description = task.get("description", "")
+
+        deadline_color = _deadline_color(deadline)
+        deadline_html = f'<span style="color:{deadline_color};font-size:12px;">⏰ {deadline}</span>' if deadline else ""
+        assignee_html = f'<span style="color:#666;font-size:12px;">👤 {escape(assignee)}</span>' if assignee else ""
+        priority_html = f'<span style="background:{p_color};color:#fff;padding:1px 6px;border-radius:3px;font-size:11px;">{p_label}</span>'
+
+        st.markdown(
+            f'<div style="background:#fff;border:1px solid #e8e8e8;border-left:3px solid {p_color};'
+            f'border-radius:8px;padding:12px;margin-bottom:10px;">'
+            f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">'
+            f'<span style="font-weight:600;font-size:14px;">{escape(task["title"])}</span>'
+            f'{priority_html}</div>'
+            f'<div style="font-size:12px;color:#888;margin-bottom:4px;">{escape(task.get("task_type", ""))} · '
+            f'{task.get("estimated_hours", 0)}h</div>'
+            f'{deadline_html} {assignee_html}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        # 折叠显示长描述
+        if description and len(description) > 50:
+            with st.expander("📄 查看描述", expanded=False):
+                st.markdown(description)
+
+        options = ["TODO", "IN_PROGRESS", "DONE"]
+        labels = {"TODO": "待办", "IN_PROGRESS": "进行中", "DONE": "已完成"}
+        current_idx = options.index(task.get("status", "TODO")) if task.get("status") in options else 0
+        new_status = st.selectbox(
+            "状态", options, index=current_idx,
+            format_func=lambda x: labels[x],
+            key=f"status_{tid}_{col_idx}",
+        )
+        if new_status != task.get("status"):
+            try:
+                resp = _api_put_json(f"/tasks/{tid}", {"status": new_status})
+                if resp.status_code == 200:
+                    st.rerun()
+                else:
+                    st.toast("更新状态失败，请重试", icon="⚠️")
+            except Exception as exc:
+                st.toast(f"更新状态失败：{exc}", icon="⚠️")
+
+        if st.button("🗑", key=f"del_{tid}_{col_idx}"):
+            try:
+                resp = _api_delete(f"/tasks/{tid}")
+                if resp.status_code == 200:
+                    st.rerun()
+                else:
+                    st.toast("删除任务失败，请重试", icon="⚠️")
+            except Exception as exc:
+                st.toast(f"删除任务失败：{exc}", icon="⚠️")
+
+    with col_todo:
+        st.markdown(f"**🟢 待办 ({len(todo)})**")
+        for t in todo:
+            _render_card(t, 0)
+
+    with col_doing:
+        st.markdown(f"**🔵 进行中 ({len(doing)})**")
+        for t in doing:
+            _render_card(t, 1)
+
+    with col_done:
+        st.markdown(f"**✅ 已完成 ({len(done)})**")
+        for t in done:
+            _render_card(t, 2)
+
+
 # ── Main ───────────────────────────────────────────────────────────────
 
 def main():
@@ -896,28 +1068,30 @@ def main():
     with st.sidebar:
         render_sidebar()
 
-    # ── 优化点 1：删除顶部标题栏 ──
-    # render_chat_header() 已移除
+    tab_chat, tab_kanban = st.tabs(["💬 聊天", "📋 任务看板"])
 
-    render_chat_area()
+    with tab_chat:
+        render_chat_area()
 
-    # Chat input at the very bottom
-    user_input = st.chat_input("输入消息，Enter 发送，Shift+Enter 换行...", max_chars=2000)
-    if user_input:
-        _handle_query(user_input)
+        user_input = st.chat_input("输入消息，Enter 发送，Shift+Enter 换行...", max_chars=2000)
+        if user_input:
+            _handle_query(user_input)
 
-    pending_refs = st.session_state.pop("pending_references", None)
-    if pending_refs:
-        _, mid, _ = st.columns([1, 8, 1])
-        with mid:
-            refs_html = '<div class="ref-section">'
-            refs_html += '<div style="font-size:12px;color:#888;margin-bottom:4px;font-weight:600;">引用来源</div>'
-            for ref in pending_refs:
-                score = round(float(ref.get("score", 0)), 4)
-                ref_file = escape(str(ref.get("source_file", "未命名资料")))
-                refs_html += f'<div class="ref-item">{ref_file} (相似度 {score})</div>'
-            refs_html += '</div>'
-            st.markdown(refs_html, unsafe_allow_html=True)
+        pending_refs = st.session_state.pop("pending_references", None)
+        if pending_refs:
+            _, mid, _ = st.columns([1, 8, 1])
+            with mid:
+                refs_html = '<div class="ref-section">'
+                refs_html += '<div style="font-size:12px;color:#888;margin-bottom:4px;font-weight:600;">引用来源</div>'
+                for ref in pending_refs:
+                    score = round(float(ref.get("score", 0)), 4)
+                    ref_file = escape(str(ref.get("source_file", "未命名资料")))
+                    refs_html += f'<div class="ref-item">{ref_file} (相似度 {score})</div>'
+                refs_html += '</div>'
+                st.markdown(refs_html, unsafe_allow_html=True)
+
+    with tab_kanban:
+        render_kanban_board()
 
 
 main()
