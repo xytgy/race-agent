@@ -77,6 +77,33 @@ def list_tasks(
         )
 
 
+@router.get("/tasks/{task_id}", response_model=ApiResponse)
+def get_task_detail(task_id: int, request: Request):
+    try:
+        detail = task_service.get_detail(task_id)
+        if detail is None:
+            return ApiResponse(
+                code=404,
+                message="task_not_found",
+                data={},
+                request_id=request.state.request_id,
+            )
+        return ApiResponse(
+            code=200,
+            message="success",
+            data=detail,
+            request_id=request.state.request_id,
+        )
+    except Exception as exc:
+        logger.error("task_detail_failed", extra={"error": str(exc)})
+        return ApiResponse(
+            code=500,
+            message="internal_error",
+            data={},
+            request_id=request.state.request_id,
+        )
+
+
 @router.put("/tasks/{task_id}", response_model=ApiResponse)
 def update_task(
     task_id: int,

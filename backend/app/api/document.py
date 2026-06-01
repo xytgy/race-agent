@@ -1,7 +1,8 @@
 import re
+import json
 from pathlib import Path
 
-from fastapi import APIRouter, File, Query, Request, UploadFile
+from fastapi import APIRouter, File, Form, Query, Request, UploadFile
 
 from app.config.settings import settings
 from app.db.database import get_db
@@ -17,7 +18,11 @@ MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 
 
 @router.post("/documents/upload", response_model=ApiResponse)
-async def upload_document(request: Request, file: UploadFile = File(...)):
+async def upload_document(
+    request: Request,
+    file: UploadFile = File(...),
+    project_id: str = Form(default=""),
+):
     try:
         # Check size before reading to avoid OOM
         if file.size and file.size > MAX_FILE_SIZE:
@@ -36,7 +41,7 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
                 data={},
                 request_id=request.state.request_id,
             )
-        result = get_document_service().upload_and_process(file.filename or "unknown", content)
+        result = get_document_service().upload_and_process(file.filename or "unknown", content, project_id=project_id)
         # 文件上传成功后，触发 FAISS 向量索引重建
         try:
             index_info = get_vector_service().rebuild_index()
@@ -103,20 +108,46 @@ def upload_from_url(request: Request):
 @router.get("/documents/recent", response_model=ApiResponse)
 def recent_documents(
     request: Request,
+    project_id: str | None = Query(default=None),
+    include_unassigned: bool = Query(default=True),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ):
     try:
         with get_db() as conn:
-            rows = conn.execute(
-                """
-                SELECT id, file_name, file_type, parse_status, chunk_count, tags, created_at
-                FROM documents
-                ORDER BY created_at DESC
-                LIMIT ? OFFSET ?
-                """,
-                (limit, offset),
-            ).fetchall()
+            if project_id:
+                if include_unassigned:
+                    rows = conn.execute(
+                        """
+                        SELECT id, file_name, file_type, parse_status, chunk_count, tags, project_id, created_at
+                        FROM documents
+                        WHERE project_id = ? OR project_id = ''
+                        ORDER BY created_at DESC
+                        LIMIT ? OFFSET ?
+                        """,
+                        (project_id, limit, offset),
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        """
+                        SELECT id, file_name, file_type, parse_status, chunk_count, tags, project_id, created_at
+                        FROM documents
+                        WHERE project_id = ?
+                        ORDER BY created_at DESC
+                        LIMIT ? OFFSET ?
+                        """,
+                        (project_id, limit, offset),
+                    ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT id, file_name, file_type, parse_status, chunk_count, tags, project_id, created_at
+                    FROM documents
+                    ORDER BY created_at DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    (limit, offset),
+                ).fetchall()
             data = []
             for r in rows:
                 d = dict(r)
@@ -138,6 +169,65 @@ def recent_documents(
         )
 
 
+@router.put("/documents/{doc_id}/project", response_model=ApiResponse)
+async def update_document_project(doc_id: str, request: Request):
+    if not re.match(r'^[0-9a-fA-F]{32}$', doc_id):
+        return ApiResponse(code=400, message="invalid_doc_id", data={}, request_id=request.state.request_id)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    project_id = str(body.get("project_id", "")).strip()
+    if project_id:
+        if not re.match(r"^conv_[0-9a-fA-F]{32}$", project_id) and not re.match(r"^conv_\d+$", project_id):
+            return ApiResponse(code=400, message="invalid_project_id", data={}, request_id=request.state.request_id)
+    try:
+        with get_db() as conn:
+            row = conn.execute("SELECT id FROM documents WHERE id = ?", (doc_id,)).fetchone()
+            if not row:
+                return ApiResponse(code=404, message="not_found", data={}, request_id=request.state.request_id)
+            conn.execute("UPDATE documents SET project_id = ? WHERE id = ?", (project_id, doc_id))
+        return ApiResponse(
+            code=200,
+            message="success",
+            data={"id": doc_id, "project_id": project_id},
+            request_id=request.state.request_id,
+        )
+    except Exception as exc:
+        logger.error("update_document_project_failed", extra={"error": str(exc)})
+        return ApiResponse(code=500, message="internal_error", data={}, request_id=request.state.request_id)
+
+
+@router.post("/documents/assign_unassigned", response_model=ApiResponse)
+async def assign_unassigned_documents(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    project_id = str(body.get("project_id", "")).strip()
+    if not project_id:
+        return ApiResponse(code=400, message="invalid_project_id", data={}, request_id=request.state.request_id)
+    if not re.match(r"^conv_[0-9a-fA-F]{32}$", project_id) and not re.match(r"^conv_\d+$", project_id):
+        return ApiResponse(code=400, message="invalid_project_id", data={}, request_id=request.state.request_id)
+    try:
+        with get_db() as conn:
+            cursor = conn.execute(
+                "UPDATE documents SET project_id = ? WHERE project_id = ''",
+                (project_id,),
+            )
+            affected = cursor.rowcount
+        return ApiResponse(
+            code=200,
+            message="success",
+            data={"assigned": affected},
+            request_id=request.state.request_id,
+        )
+    except Exception as exc:
+        logger.error("assign_unassigned_documents_failed", extra={"error": str(exc)})
+        return ApiResponse(code=500, message="internal_error", data={}, request_id=request.state.request_id)
+
+
+
 @router.get("/documents/{doc_id}", response_model=ApiResponse)
 def get_document_detail(doc_id: str, request: Request):
     """获取文档详情（含内容摘要和标签）"""
@@ -146,17 +236,24 @@ def get_document_detail(doc_id: str, request: Request):
     try:
         with get_db() as conn:
             row = conn.execute(
-                "SELECT id, file_name, file_type, parse_status, chunk_count, tags, summary, created_at FROM documents WHERE id = ?",
+                "SELECT id, file_name, file_type, parse_status, chunk_count, tags, summary, project_id, created_at FROM documents WHERE id = ?",
                 (doc_id,),
             ).fetchone()
             if not row:
                 return ApiResponse(code=404, message="not_found", data={}, request_id=request.state.request_id)
             doc = dict(row)
-            chunks = conn.execute(
-                "SELECT content FROM chunks WHERE document_id = ? ORDER BY chunk_index LIMIT 3",
-                (doc_id,),
-            ).fetchall()
-            doc["preview"] = "\n\n".join(r["content"][:200] for r in chunks)
+            chunk_path = Path(settings.data_dir) / "chunks" / f"{doc_id}.json"
+            preview_parts: list[str] = []
+            if chunk_path.exists():
+                try:
+                    chunk_payload = json.loads(chunk_path.read_text(encoding="utf-8"))
+                    if isinstance(chunk_payload, list):
+                        for item in chunk_payload[:3]:
+                            if isinstance(item, dict) and item.get("content"):
+                                preview_parts.append(str(item["content"])[:200])
+                except Exception:
+                    preview_parts = []
+            doc["preview"] = "\n\n".join(preview_parts)
             doc["tags"] = [t.strip() for t in (doc.get("tags") or "").split(",") if t.strip()]
         return ApiResponse(code=200, message="success", data=doc, request_id=request.state.request_id)
     except Exception as exc:

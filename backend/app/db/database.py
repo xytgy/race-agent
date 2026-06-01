@@ -47,6 +47,9 @@ def init_db() -> None:
               file_type TEXT NOT NULL,
               parse_status TEXT NOT NULL,
               chunk_count INTEGER NOT NULL DEFAULT 0,
+              tags TEXT NOT NULL DEFAULT '',
+              summary TEXT NOT NULL DEFAULT '',
+              project_id TEXT NOT NULL DEFAULT '',
               created_at TEXT NOT NULL
             );
 
@@ -103,7 +106,20 @@ def init_db() -> None:
             );
             """
         )
+        _migrate_documents_table(conn)
         _migrate_tasks_table(conn)
+
+
+def _migrate_documents_table(conn: sqlite3.Connection) -> None:
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(documents)").fetchall()}
+    migrations = [
+        ("tags", "TEXT NOT NULL DEFAULT ''"),
+        ("summary", "TEXT NOT NULL DEFAULT ''"),
+        ("project_id", "TEXT NOT NULL DEFAULT ''"),
+    ]
+    for col, definition in migrations:
+        if col not in existing:
+            conn.execute(f"ALTER TABLE documents ADD COLUMN {col} {definition}")
 
 
 def _migrate_tasks_table(conn: sqlite3.Connection) -> None:

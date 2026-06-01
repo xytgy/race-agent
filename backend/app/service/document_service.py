@@ -135,7 +135,7 @@ class DocumentService:
         content = f"# {title}\n\n来源: {url}\n\n{text}"
         return self.upload_and_process(file_name, content.encode("utf-8"))
 
-    def upload_and_process(self, file_name: str, content: bytes) -> dict:
+    def upload_and_process(self, file_name: str, content: bytes, project_id: str = "") -> dict:
         suffix = Path(file_name).suffix.lower().lstrip(".")
         if suffix not in self.SUPPORTED_TYPES:
             raise ValueError("only pdf/md/txt/docx/xlsx/pptx are supported")
@@ -157,8 +157,11 @@ class DocumentService:
         with get_db() as conn:
             conn.execute(
                 """
-                INSERT INTO documents(id, file_name, file_path, file_type, parse_status, chunk_count, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO documents(
+                    id, file_name, file_path, file_type, parse_status, chunk_count,
+                    tags, summary, project_id, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     document_id,
@@ -167,6 +170,9 @@ class DocumentService:
                     suffix,
                     "PROCESSING",
                     0,
+                    "",
+                    "",
+                    project_id or "",
                     created_at,
                 ),
             )

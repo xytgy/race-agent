@@ -4,9 +4,12 @@ import time
 from datetime import datetime
 from html import escape
 from pathlib import Path
+from urllib.parse import quote
 
 import requests
 import streamlit as st
+
+from doc_filters import compute_doc_filter_state, filter_docs
 
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
@@ -224,15 +227,42 @@ def _export_chat() -> str:
     return "\n".join(lines)
 
 
-def _load_recent_docs() -> list[dict]:
+def _load_recent_docs(project_id: str | None = None, *, include_unassigned: bool = True) -> list[dict]:
     try:
-        resp = _api_get("/documents/recent")
+        path = "/documents/recent"
+        if project_id:
+            include_text = "true" if include_unassigned else "false"
+            path = f"{path}?project_id={quote(project_id)}&include_unassigned={include_text}"
+        resp = _api_get(path)
         payload = resp.json()
         if resp.status_code == 200 and payload.get("code") == 200:
             return payload.get("data", {}).get("items", [])
     except Exception:
         pass
     return []
+
+
+def _assign_doc_to_project(doc_id: str, project_id: str) -> tuple[bool, str]:
+    try:
+        resp = _api_put_json(f"/documents/{doc_id}/project", {"project_id": project_id})
+        payload = resp.json()
+        if resp.status_code == 200 and payload.get("code") == 200:
+            return True, "已归档到当前项目。"
+        return False, _error_message(payload.get("message", ""))
+    except Exception as exc:
+        return False, f"归档失败：{exc}"
+
+
+def _assign_unassigned_docs(project_id: str) -> tuple[bool, str]:
+    try:
+        resp = _api_post_json("/documents/assign_unassigned", {"project_id": project_id}, timeout=60)
+        payload = resp.json()
+        if resp.status_code == 200 and payload.get("code") == 200:
+            assigned = payload.get("data", {}).get("assigned", 0)
+            return True, f"已归档 {assigned} 个未归属资料。"
+        return False, _error_message(payload.get("message", ""))
+    except Exception as exc:
+        return False, f"归档失败：{exc}"
 
 
 def _load_logs() -> list[dict]:
@@ -302,7 +332,7 @@ def _load_task_detail(task_id: int) -> tuple[bool, dict | str]:
         return False, f"任务详情加载失败：{exc}"
 
 
-def _upload_document(uploaded_file) -> tuple[bool, str]:
+def _upload_document(uploaded_file, project_id: str = "") -> tuple[bool, str]:
     files = {
         "file": (
             uploaded_file.name,
@@ -310,8 +340,15 @@ def _upload_document(uploaded_file) -> tuple[bool, str]:
             uploaded_file.type or "application/octet-stream",
         )
     }
+    data = {"project_id": project_id} if project_id else {}
     try:
-        resp = requests.post(f"{API_BASE_URL}/documents/upload", files=files, headers=_api_headers(), timeout=120)
+        resp = requests.post(
+            f"{API_BASE_URL}/documents/upload",
+            data=data,
+            files=files,
+            headers=_api_headers(),
+            timeout=120,
+        )
         payload = resp.json()
         if resp.status_code == 200 and payload.get("code") == 200:
             return True, "资料上传成功。"
@@ -345,7 +382,11 @@ def init_session_state():
         else:
             _create_new_conversation()
     if "latest_docs" not in st.session_state:
-        st.session_state.latest_docs = _load_recent_docs()
+        st.session_state.latest_docs = _load_recent_docs(st.session_state.current_conv_id)
+    if "include_unassigned_docs" not in st.session_state:
+        st.session_state.include_unassigned_docs = True
+    if "only_unassigned_docs" not in st.session_state:
+        st.session_state.only_unassigned_docs = False
     if "is_generating" not in st.session_state:
         st.session_state.is_generating = False
     # Model-related state
@@ -382,7 +423,7 @@ def render_sidebar():
     st.markdown("<div style='height: 8px'></div>", unsafe_allow_html=True)
 
     # 对话搜索
-    search_query = st.text_input("🔍 搜索对话", placeholder="输入关键词...", key="conv_search", label_visibility="collapsed")
+    search_query = st.text_input("🔍 搜索项目", placeholder="输入关键词...", key="conv_search", label_visibility="collapsed")
 
     filtered_convs = st.session_state.conversations
     if search_query:
@@ -416,7 +457,7 @@ def render_sidebar():
 
     col_new, col_export = st.columns(2)
     with col_new:
-        if st.button("＋ 新建", use_container_width=True, key="new_conv_inline"):
+        if st.button("＋ 新建项目", use_container_width=True, key="new_conv_inline"):
             _create_new_conversation()
             st.rerun()
     with col_export:
@@ -432,11 +473,52 @@ def render_sidebar():
 
     st.markdown("---")
 
-    # 每次渲染都刷新文档列表，确保数据最新
-    st.session_state.latest_docs = _load_recent_docs()
-    docs = st.session_state.latest_docs
+    include_unassigned = st.toggle(
+        "包含未归属资料",
+        value=bool(st.session_state.get("include_unassigned_docs", True)),
+        key="include_unassigned_docs",
+    )
+    only_unassigned = st.toggle(
+        "只看未归属",
+        value=bool(st.session_state.get("only_unassigned_docs", False)),
+        key="only_unassigned_docs",
+    )
+    include_unassigned, only_unassigned = compute_doc_filter_state(
+        include_unassigned=include_unassigned, only_unassigned=only_unassigned
+    )
+    if include_unassigned != bool(st.session_state.get("include_unassigned_docs", True)):
+        st.session_state.include_unassigned_docs = include_unassigned
+        st.rerun()
+
+    docs_raw = _load_recent_docs(
+        st.session_state.current_conv_id,
+        include_unassigned=include_unassigned,
+    )
+    docs = filter_docs(docs_raw, only_unassigned=only_unassigned)
+    st.session_state.latest_docs = docs_raw
+
     doc_count = len(docs) if docs else 0
+    unassigned_count = len([d for d in docs_raw if not d.get("project_id")]) if docs_raw else 0
     st.markdown(f'<div class="sidebar-section-label">📁 资料库 ({doc_count})</div>', unsafe_allow_html=True)
+    st.caption(f"未归属：{unassigned_count}")
+
+    if unassigned_count > 0 and bool(st.session_state.get("include_unassigned_docs", True)):
+        if st.button("🗂️ 一键归档未归属资料到当前项目", use_container_width=True, key="assign_unassigned_btn"):
+            ok, message = _assign_unassigned_docs(st.session_state.current_conv_id)
+            if ok:
+                docs_raw = _load_recent_docs(
+                    st.session_state.current_conv_id,
+                    include_unassigned=bool(st.session_state.get("include_unassigned_docs", True)),
+                )
+                docs = filter_docs(
+                    docs_raw,
+                    only_unassigned=bool(st.session_state.get("only_unassigned_docs", False)),
+                )
+                st.session_state.latest_docs = docs_raw
+                st.toast(message, icon="✅")
+                st.rerun()
+            else:
+                st.toast(message, icon="⚠️")
 
     uploaded = st.file_uploader(
         "上传资料",
@@ -447,9 +529,17 @@ def render_sidebar():
     if uploaded is not None:
         if st.button("📤 上传并处理", use_container_width=True, key="upload_submit"):
             with st.spinner("正在处理资料..."):
-                ok, message = _upload_document(uploaded)
+                ok, message = _upload_document(uploaded, st.session_state.current_conv_id)
             if ok:
-                st.session_state.latest_docs = _load_recent_docs()
+                docs_raw = _load_recent_docs(
+                    st.session_state.current_conv_id,
+                    include_unassigned=bool(st.session_state.get("include_unassigned_docs", True)),
+                )
+                docs = filter_docs(
+                    docs_raw,
+                    only_unassigned=bool(st.session_state.get("only_unassigned_docs", False)),
+                )
+                st.session_state.latest_docs = docs_raw
                 st.toast(message, icon="✅")
                 st.rerun()
             else:
@@ -461,20 +551,44 @@ def render_sidebar():
             file_type = doc.get("file_type", "")
             chunk_count = doc.get("chunk_count", 0)
             tags = doc.get("tags", [])
+            doc_project_id = doc.get("project_id") or ""
             type_icons = {"pdf": "📄", "md": "📝", "txt": "📃", "docx": "📘", "xlsx": "📊", "pptx": "📑"}
             icon = type_icons.get(file_type, "📎")
             tags_html = ""
             if tags:
                 tags_html = " ".join(f'<span style="background:#e8f4fd;color:#1976d2;padding:1px 5px;border-radius:3px;font-size:10px;">{escape(t)}</span>' for t in tags[:3])
                 tags_html = f'<div style="margin-top:2px;">{tags_html}</div>'
+            project_badge = ""
+            if not doc_project_id:
+                project_badge = '<span style="background:#fff3cd;color:#b45309;padding:1px 6px;border-radius:999px;font-size:10px;margin-left:6px;">未归属</span>'
             with col_file:
                 st.markdown(
-                    f'<div class="file-item">{icon} {escape(str(doc.get("file_name", "未命名资料")))}'
+                    f'<div class="file-item">{icon} {escape(str(doc.get("file_name", "未命名资料")))}{project_badge}'
                     f'<span style="color:#bbb;font-size:11px;margin-left:4px;">{chunk_count}片</span></div>'
                     f'{tags_html}',
                     unsafe_allow_html=True,
                 )
             with col_del:
+                if not doc_project_id:
+                    if st.button("归档", key=f"assign_doc_{doc.get('id')}", help="归档到当前项目"):
+                        doc_id = doc.get("id")
+                        if doc_id:
+                            ok, message = _assign_doc_to_project(doc_id, st.session_state.current_conv_id)
+                            if ok:
+                                docs_raw = _load_recent_docs(
+                                    st.session_state.current_conv_id,
+                                    include_unassigned=bool(st.session_state.get("include_unassigned_docs", True)),
+                                )
+                                docs = filter_docs(
+                                    docs_raw,
+                                    only_unassigned=bool(st.session_state.get("only_unassigned_docs", False)),
+                                )
+                                st.session_state.latest_docs = docs_raw
+                                st.toast(message, icon="✅")
+                                st.rerun()
+                            else:
+                                st.toast(message, icon="⚠️")
+
                 pending_key = f"pending_delete_doc_{doc.get('id')}"
                 if st.session_state.get(pending_key):
                     if st.button("✓", key=f"confirm_doc_{i}", help="确认删除"):
@@ -519,7 +633,15 @@ def render_sidebar():
                     if st.button("💾 保存标签", key=f"save_tags_{i}"):
                         tag_list = [t.strip() for t in new_tags.split(",") if t.strip()]
                         _api_put_json(f"/documents/{doc.get('id')}/tags", {"tags": tag_list})
-                        st.session_state.latest_docs = _load_recent_docs()
+                        docs_raw = _load_recent_docs(
+                            st.session_state.current_conv_id,
+                            include_unassigned=bool(st.session_state.get("include_unassigned_docs", True)),
+                        )
+                        docs = filter_docs(
+                            docs_raw,
+                            only_unassigned=bool(st.session_state.get("only_unassigned_docs", False)),
+                        )
+                        st.session_state.latest_docs = docs_raw
                         st.toast("标签已保存", icon="✅")
                 except Exception as exc:
                     st.error(f"加载详情失败：{exc}")

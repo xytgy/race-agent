@@ -254,7 +254,8 @@ class TaskService:
                 """
                 SELECT id, conversation_id, title, description, task_type, priority,
                        difficulty, estimated_hours, dependency, deliverable,
-                       status, assignee, deadline, created_at, updated_at
+                       status, assignee, deadline, created_at, updated_at,
+                       (SELECT COUNT(*) FROM task_sources ts WHERE ts.task_id = tasks.id) AS source_count
                 FROM tasks
                 WHERE conversation_id = ?
                 ORDER BY id ASC
@@ -262,6 +263,31 @@ class TaskService:
                 (conversation_id,),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    def get_detail(self, task_id: int) -> dict | None:
+        with get_db() as conn:
+            task = conn.execute(
+                """
+                SELECT id, conversation_id, title, description, task_type, priority,
+                       difficulty, estimated_hours, dependency, deliverable,
+                       status, assignee, deadline, created_at, updated_at
+                FROM tasks
+                WHERE id = ?
+                """,
+                (task_id,),
+            ).fetchone()
+            if not task:
+                return None
+            sources = conn.execute(
+                """
+                SELECT id, task_id, document_id, chunk_id, source_file, page_no, section, score, created_at
+                FROM task_sources
+                WHERE task_id = ?
+                ORDER BY id ASC
+                """,
+                (task_id,),
+            ).fetchall()
+        return {"task": dict(task), "sources": [dict(r) for r in sources]}
 
     def update_task(self, task_id: int, status: str | None = None,
                     assignee: str | None = None, deadline: str | None = None) -> dict | None:

@@ -9,8 +9,6 @@ services:
     environment:
       - DATA_DIR=/app/data
       - HF_HOME=/root/.cache/huggingface
-    ports:
-      - "8000:8000"
     volumes:
       - ./data:/app/data
       - ./backend:/app/backend
@@ -34,6 +32,31 @@ services:
       - ./data:/app/data
     depends_on:
       - backend
+
+  frontend_web:
+    build:
+      context: ./frontend_web
+      dockerfile: Dockerfile
+    container_name: raceagent-frontend-web
+    environment:
+      - PORT=3000
+    expose:
+      - "3000"
+    depends_on:
+      - backend
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: raceagent-nginx
+    env_file:
+      - .env
+    ports:
+      - "80:80"
+    volumes:
+      - ./deploy/nginx:/etc/nginx/templates:ro
+    depends_on:
+      - backend
+      - frontend_web
 
 volumes:
   backend-pip-packages:
